@@ -1,5 +1,5 @@
 [package]
-name = "cargo-out"
+name = "cargo-outdir"
 version = "0.1.0"
 authors = ["Techcable <Techcable@techcable.net>"]
 license = "MIT OR Apache-2.0"

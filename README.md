@@ -1,14 +1,14 @@
-cargo-out ![crates.io](https://shields.io/crates/v/cargo-out)
+cargo-outdir ![crates.io](https://shields.io/crates/v/cargo-outdir)
 =============
 A cargo subcommand to fetch the [`$OUT_DIR` variable](https://doc.rust-lang.org/cargo/reference/build-scripts.html#outputs-of-the-build-script) from build scripts.
 
 This is extremely useful to inspect the output of automatically generated code, like [bindgen](https://rust-lang.github.io/rust-bindgen/) or [parol](https://lib.rs/crates/parol).
 
-This can be seen as an extension to `cargo metadata`, except it effectively requires that build scripts succed.
+This can be seen as an extension to `cargo metadata`, except it requires that `cargo check` succeeds.
 
-If `cargo check` succeeds, then this command should succeed to (and give the same output).
+If `cargo check` succeeds, then this command succeeds to (and give the same output).
 
-Due to recent changes in `cargo check`, this *will not invalidate cached outputs*, so the build wont be re-run unless it needs to.
+Due to recent changes in `cargo check`, this *will not invalidate cached outputs*, so the build scripts wont be re-run unless they need to :)
 
 ## Examples
 #### `$ cargo out`

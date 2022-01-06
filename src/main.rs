@@ -1,4 +1,5 @@
 #![doc = include_str!("../README.md")]
+#![warn(clippy::doc_markdown)]
 
 use std::collections::HashMap;
 use std::env;
@@ -20,10 +21,12 @@ mod suggestions;
 
 /// Detects the `$OUT_DIR` for build script outputs.
 ///
-/// Cargo documentation build script outputs:
-/// https://doc.rust-lang.org/cargo/reference/build-scripts.html#outputs-of-the-build-script
+/// See also the Cargo documentation on build script outputs:
 ///
-/// By default, information is output in an ad hoc format, seperated by newlines.`
+///
+/// <https://doc.rust-lang.org/cargo/reference/build-scripts.html#outputs-of-the-build-script>
+///
+/// By default, information is output in an ad hoc format, seperated by newlines:
 /// `<package_name> <package.OUT_DIR>`
 ///
 /// However, you can specify `--no-names` to disable the package names,
@@ -182,7 +185,7 @@ impl<'a> TargetPackages<'a> {
                             if let Some(suggestion) =
                                 suggestions::did_you_mean(spec, meta.all_packages_names()).get(0)
                             {
-                                write!(msg, ". Did you mean {:?}?", suggestion).unwrap()
+                                write!(msg, ". Did you mean {:?}?", suggestion).unwrap();
                             }
                             return Err(anyhow::anyhow!(msg));
                         }
@@ -249,7 +252,7 @@ fn main() -> anyhow::Result<()> {
                 let out_dir = match map.get("out_dir") {
                     Some(&Value::String(ref s)) => Some(s.clone()),
                     Some(&Value::Null) | None => None,
-                    Some(ref s) => panic!("Out dir is not a string: {:?}", s),
+                    Some(s) => panic!("Out dir is not a string: {:?}", s),
                 };
                 let old = out_dirs.insert(package_id.clone(), out_dir);
                 if old.is_some() && cli.verbose {
@@ -302,7 +305,7 @@ fn main() -> anyhow::Result<()> {
                     print!("{} ", &pkg.name);
                 }
                 match out_dir {
-                    Some(ref out) => {
+                    Some(out) => {
                         println!("{}", out);
                     }
                     None => {
