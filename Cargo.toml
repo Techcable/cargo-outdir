@@ -23,6 +23,8 @@ indexmap = { version = "1", features = ["serde"] }
 anyhow = "1"
 # Used to give similarity suggestions (did you mean <other crate>?)
 strsim = "0.10"
+# Used to check terminal vs script (setting the default for --quiet)
+atty = "0.2"
 
 # Serialize
 serde = { version = "1", features = ["derive"] }

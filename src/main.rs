@@ -38,11 +38,16 @@ struct Cli {
     manifest: clap_cargo::Manifest,
     #[clap(flatten)]
     features: clap_cargo::Features,
-    /// Be more verbose, outputting messages directly from `cargo check`
+    /// Be more verbose, outputting more warnings 
     ///
     /// By default, messages are suppressed unless a build error occurrs.
-    #[clap(long)]
+    #[clap(long, short)]
     verbose: bool,
+    /// Supress output from cargo check
+    /// 
+    /// This is the default if stdout is not a terminal.
+    #[clap(long, short)]
+    quiet: bool,
     /// Use a compact json format to ouptut package directory names,
     /// instead of the ad-hoc line by line format.
     ///
@@ -62,6 +67,19 @@ struct Cli {
         conflicts_with = "workspace"
     )]
     no_names: bool,
+    /// Skip packages that are missing outdirs (dont have build scripts).
+    /// 
+    /// This is the default when using `--workspace` or `--all` (and not specifying `--json`)
+    ///
+    /// If no packages are found with outdirs, this will exit with an error (2).
+    #[clap(long = "skip-missing")]
+    skip_missing_outdirs: bool,
+    /// Include packages that are missing outdirs (ones that don't have build scripts).
+    ///
+    /// This is the default when using `--current` or an explicit list of packages.
+    /// 
+    #[clap(long = "include-missing", conflicts_with = "skip-missing-outdirs")]
+    include_missing_outdirs: bool,
     /// Process *all* the possible packages, including transitive dependencies.
     ///
     /// Consider using `--workspace` instead (to avoid transitive dependencies)
@@ -202,6 +220,18 @@ fn main() -> anyhow::Result<()> {
     let target = cli.target();
     let packages = target.collect_set(&metadata)?;
     let mut check = Command::new(cargo_path());
+    let quiet = !cli.verbose && (cli.quiet || atty::isnt(atty::Stream::Stderr));
+    let include_missing_outdirs = match (cli.include_missing_outdirs, cli.skip_missing_outdirs) {
+        (true, true) => anyhow::bail!("Cannot specify to both include and skip packages that are missing outdirs"),
+        (true, false) => true,
+        (false, true) => false,
+        (false, false) => {
+            // Default behavior
+            // explicit packages => include missing
+            // --workspace and --all => skip missing
+            target.is_explicit() || cli.json
+        }
+    };
     check.arg("check").arg("--message-format=json");
     if target.is_explicit() && packages.iter().all(|pkg| metadata.workspace_packages.contains(pkg)) {
         for pkg in &packages {
@@ -213,7 +243,7 @@ fn main() -> anyhow::Result<()> {
         // Just run the whole workspace then filter ;)
         check.arg("--workspace");
     }
-    if cli.verbose {
+    if !quiet {
         eprintln!("Running `cargo check`:");
         check.stderr(Stdio::inherit());
     } else {
@@ -272,15 +302,22 @@ fn main() -> anyhow::Result<()> {
             }
         })
         .transpose()?;
-    let status = child.wait().context("`cargo check` exited abnormally")?;
-    let mut missing_required_out_dir = false;
+    let check_status = child.wait().context("`cargo check` exited abnormally")?;
+    let mut problem = None;
 
-    if status.success() {
+
+    if check_status.success() {
         let out_dirs = packages
             .iter()
             .map(|pkg| (pkg.clone(), out_dirs.get(pkg).and_then(|o| o.as_ref())))
+            .filter(|(_pkg, out_dir)| include_missing_outdirs || out_dir.is_some())
             .collect::<IndexMap<_, _>>();
+        if out_dirs.is_empty() {
+            problem = Some(Problem::NothingToPrint);
+        }
         if cli.json {
+            // Json mode ignores problems (open an issue if this is not what you want)
+            problem = None;
             serde_json::to_writer(io::stdout(), &out_dirs).expect("Failed to write output");
             io::stdout().write_all(b"\n").unwrap();
         } else {
@@ -294,7 +331,8 @@ fn main() -> anyhow::Result<()> {
                         println!("{}", out);
                     }
                     None => {
-                        missing_required_out_dir = true;
+                        assert!(include_missing_outdirs); // Should've been filtered earlier
+                        problem = Some(Problem::MissingOutDir);
                         println!("<MISSING OUT_DIR>");
                     }
                 }
@@ -302,12 +340,29 @@ fn main() -> anyhow::Result<()> {
         }
     } else if let Some(err) = stderr {
         // Print the output from cargo check (that we have previously been hoarding)
+        // TOOD: Prettier output (convert from json => semi-human)
         io::stderr()
             .write_all(err.as_bytes())
             .expect("Failed to dump cargo error messages :(");
     }
-    if missing_required_out_dir {
-        std::process::exit(2);
+    match problem {
+        Some(Problem::MissingOutDir) => {
+            if !quiet{
+                eprintln!("ERROR: Some packages are missing $OUT_DIR (or build scripts)");
+            }
+            std::process::exit(2);
+        }
+        Some(Problem::NothingToPrint) => {
+            if !quiet {
+                eprintln!("ERROR: None of the packages have an an $OUT_DIR (or build scripts)");
+            }
+            std::process::exit(2);
+        },
+        None => Ok(())
     }
-    Ok(())
+}
+
+enum Problem {
+    MissingOutDir,
+    NothingToPrint
 }
