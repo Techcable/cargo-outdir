@@ -76,7 +76,7 @@ struct Cli {
     #[clap(long, short, group = "target-packages")]
     current: bool,
     /// The target packages to analyse.
-    #[clap(group = "target-packages", required(false))]
+    #[clap(group = "target-packages")]
     explicit_packages: Vec<String>,
 }
 impl Cli {
@@ -136,22 +136,6 @@ impl<'a> Index<&'a PackageId> for AnalysedMetadata {
     fn index(&self, id: &'a PackageId) -> &'_ Package {
         &self.packages[id]
     }
-}
-
-pub fn create_equivalent_spec(pkg: &Package) -> String {
-    let mut res = String::new();
-    if let Some(src) = pkg.source.as_ref().map(|src| &src.repr) {
-        let src = match src.find('+') {
-            Some(index) => &src[index + 1..],
-            None => panic!("Invalid src: {} for {}", src, pkg.name),
-        };
-        res.push_str(src);
-        res.push('#');
-    }
-    res.push_str(&*pkg.name);
-    res.push(':');
-    write!(res, "{}", pkg.version).unwrap();
-    res
 }
 
 enum TargetPackages<'a> {
@@ -219,10 +203,11 @@ fn main() -> anyhow::Result<()> {
     let packages = target.collect_set(&metadata)?;
     let mut check = Command::new(cargo_path());
     check.arg("check").arg("--message-format=json");
-    if target.is_explicit() {
+    if target.is_explicit() && packages.iter().all(|pkg| metadata.workspace_packages.contains(pkg)) {
         for pkg in &packages {
             check.arg("-p");
-            check.arg(create_equivalent_spec(&metadata[pkg]));
+            // Just specify the name and let cargo figure it out :)
+            check.arg(&metadata[pkg].name);
         }
     } else {
         // Just run the whole workspace then filter ;)
