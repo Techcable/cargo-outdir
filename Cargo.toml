@@ -1,0 +1,39 @@
+[package]
+name = "cargo-out"
+version = "0.1.0"
+authors = ["Techcable <Techcable@techcable.net>"]
+license = "MIT OR Apache-2.0"
+description = "A cargo subcommand to get the $OUT_DIR environment variable from build scripts."
+repository = "https://github.com/Techcable/cargo-out"
+keywords = ["cargo", "subcommand", "out-dir", "cli", "cargo-out", "cargo-out-dir", "OUT_DIR"]
+categories = ["development-tools::cargo-plugins", "development-tools::build-utils", "command-line-utilities"]
+edition = "2021"
+readme = "README.md"
+
+[dependencies]
+clap = { version = "3.0", features = ["derive"] }
+# Utilities
+clap-cargo = { version = "0.8", features = ["cargo_metadata"] }
+# Parsing cargo metadata
+cargo_metadata = "0.14"
+
+# indexmap (we want output to preserve order in our output maps)
+indexmap = { version = "1", features = ["serde"] }
+# Errors
+anyhow = "1"
+# Used to give similarity suggestions (did you mean <other crate>?)
+strsim = "0.10"
+
+# Serialize
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+# thin: 1.4M, 10.78s
+# regular: 1.5M, 10.10s
+# fat: 1.3M, 16.46s
+#
+# thin seems to provide the best tradeoff here :)
+lto = "thin"
+
+
