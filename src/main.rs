@@ -5,20 +5,22 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt::Write as FmtWrite;
 use std::io::{self, Read, Write};
-use std::ops::Index;
+use std::ops::{Deref, Index};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::{env, iter};
+use std::{any, env, iter};
+use std::str::FromStr;
+use std::fmt::{self, Display, Formatter};
+use std::cell::Cell;
 
+use once_cell::unsync::OnceCell;
 use anyhow::Context;
 use indexmap::{IndexMap, IndexSet};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Deserializer, Value};
 
-use cargo_metadata::{Metadata, Package, PackageId};
+use cargo_metadata::{Metadata, Package, PackageId, Source, Version};
 use clap::Parser;
-
-mod suggestions;
 
 /// Detects the `$OUT_DIR` for build script outputs.
 ///
@@ -114,9 +116,56 @@ impl Cli {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PackageConflictKind {
+    /// Multiple packages with the same name 
+    Names,
+    /// Multiple packages with the smae version
+    Version
+}
+
+struct AnalysedPackage {
+    metadata: Package,
+    conflicts: Cell<Option<PackageConflictKind>>,
+    // Lazy loaded
+    minimal_spec: OnceCell<PackageSpec>
+}
+impl AnalysedPackage {
+    pub fn matches(&self, spec: &PackageSpec) {
+        assert!(spec.name.is_some() || spec.version.is_some() || spec.source.is_some(), "Invalid spec: {:?}", spec)
+        if let Some(ref name) = spec.name {
+            if self.name != *name {
+                return false;
+            }
+        }
+        if let Some(ref version) = spec.version {
+            if self.version != *version {
+                return false;
+            }
+        }
+        if let Some(ref expected_src) = spec.source {
+            match self.source {
+                Some(ref src) => {
+                    let plus_offset = src.repr.find('+').unwrap_or_else(|| panic!("Unexpected source: {}", src));
+                    if &*expected_src != &*src.repr[plus_offset + 1..] {
+                        return false
+                    }
+                },
+                None => return false,
+            }
+        }
+    }
+}
+impl Deref for AnalysedPackage {
+    type Target = Package;
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.metadata
+    }
+}
+
 struct AnalysedMetadata {
-    // Works around issue #170 (premature optimization?)
-    packages: HashMap<PackageId, Package>,
+    packages: HashMap<PackageId, AnalysedPackage>,
     workspace_packages: IndexSet<PackageId>,
     current_package: Option<PackageId>,
 }
@@ -126,8 +175,46 @@ impl AnalysedMetadata {
         let packages = meta
             .packages
             .drain(..)
-            .map(|pkg| (pkg.id.clone(), pkg))
+            .map(|pkg| (pkg.id.clone(), AnalysedPackage { metadata: pkg, spec: OnceCell::default(), conflicts: Cell::new(None) }))
             .collect::<HashMap<_, _>>();
+        let mut by_name: HashMap<String, Vec<PackageId>> = HashMap::with_capacity(packages.len());
+        for (id , pkg) in packages.iter() {
+            let matching_names = by_name.entry(pkg.name.clone())
+                .or_insert_with(Vec::new);
+            matching_names.push(id.clone());
+            match matching_names.len() {
+                0 => unreachable!(),
+                1 => {
+                    // No conflicts, because we're the only entry
+                    continue;
+                },
+                2 => {
+                    // Mark the previous entry as a name conflict
+                    let first = &packages[&matching_names[0]];
+                    assert_eq!(first.conflicts.get(), None);
+                    first.conflicts.set(Some(PackageConflictKind::Names));
+                },
+                _ => {} // If we had 2 before, they're already marked as conflicts
+            }
+            // Mark the new entry as a name conflict
+            pkg.conflicts.set(Some(PackageConflictKind::Names));
+            // Check for possible duplicates with the same name
+            let has_matching_versions = matching_names.iter()
+                .filter(|&other_id| other_id != id)
+                .any(|other_pkg_id| {
+                    let other_pkg = &packages[other_pkg_id];
+                    if other_pkg.version == pkg.version {
+                        // We found another matching version
+                        other_pkg.conflicts.set(Some(PackageConflictKind::Version));
+                        true
+                    } else {
+                        false
+                    }
+                });
+            if has_matching_versions {
+                pkg.conflicts.set(Some(PackageConflictKind::Version));
+            }
+        }
         let workspace_packages = meta.workspace_members.drain(..).collect();
         AnalysedMetadata {
             current_package,
@@ -135,11 +222,48 @@ impl AnalysedMetadata {
             packages,
         }
     }
-    pub fn get_by_name(&self, name: &str) -> Option<&'_ PackageId> {
-        self.packages
-            .iter()
-            .find(|(_, package)| *package.name == *name)
-            .map(|(id, _)| id)
+    /// Determine the id corresponding to the specified psec
+    pub fn determine_id(&self, spec: &PackageSpec) -> &'_ PackageId {
+        // TODO: Care
+        for pkg in self.packages.keys() {
+            if pkg
+        }
+    }
+    /// Determine the minimal specification required to refer to the specified [PackageId]
+    pub fn determine_spec(&self, id: &PackageId) -> &'_ PackageSpec {
+        let pkg = &self.packages[id];
+        pkg.spec.get_or_init(|| {
+            let mut res = PackageSpec {
+                resolved_id: OnceCell::from(id.clone()),
+                name: Some(pkg.name.clone()),
+                version: None,
+                source: None,
+            };
+            match pkg.conflicts.get() {
+                None => {
+                    // The name is sufficent
+                },
+                Some(PackageConflictKind::Names) => {
+                    // Add in version to disambiguate
+                    res.version = Some(pkg.version.clone());
+                },
+                Some(PackageConflictKind::Version) => {
+                    // Add in version and source to disambiguate
+                    res.version = Some(pkg.version.clone());
+                    if let Some(ref src) = pkg.source {
+                        if let Some(idx) = src.repr.find('+') {
+                            res.source = Some(String::from(&src.repr[idx + 1..]))
+                        } else {
+                            panic!("Unexpected source {:?} for {:?}", src.repr, id);
+                        }
+                        assert!(res.is_fully_qualified());
+                    } else {
+                        // If we don't have a 'source', just hope the other one does
+                    }
+                }
+            };
+            res
+        })
     }
     #[inline]
     fn all_packages(&self) -> impl Iterator<Item = &'_ PackageId> + '_ {
@@ -150,13 +274,146 @@ impl AnalysedMetadata {
         self.packages.values().map(|pkg| &*pkg.name)
     }
 }
+/// The specification of a package as given by `cargo pkgid`.  
+///
+/// This is *NOT* a [`cargo_metadata::PackageId`], because it is valid input (or output) for `cargo pkgid`
+/// 
+///
+/// When used with [AnalysedMetadata], it is also normalized to the simplest unambigous form.
+///
+/// That is, if there's only one version of `syn`, the spec will be "syn".
+///
+/// If there are two versions of syn, the spec will be "syn:1.0", "syn:2.0"
+///
+/// If there are two copies of the same package, with the same name and version (but different
+/// sources),
+/// then sources will be included too.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PackageSpec {
+    name: Option<String>,
+    version: Option<Version>,
+    source: Option<String>
+}
+impl Serialize for PackageSpec {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer {
+        self.to_string().serialize(serializer)
+    }
+}
+impl PackageSpec {
+    #[inline]
+    pub fn from_name(name: String) -> Self {
+        PackageSpec { name: Some(name), version: None, source: None, resolved_id: Default::default() }
+    }
+    #[inline]
+    fn is_fully_qualified(&self) -> bool {
+        self.name.is_some() && self.version.is_some() && self.source.is_some()
+    }
+}
+impl Display for PackageSpec {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        if let Some(ref source) = self.source {
+            f.write_str(source)?;
+            f.write_char('#')?;
+        }
+        if let Some(ref name) = self.name {
+            f.write_str(name);
+        }
+        if self.name.is_some() && self.version.is_some() {
+            f.write_char(':')?;
+        }
+        if let Some(ref version) = self.version {
+            write!(f, "{}", version)?;
+        }
+        Ok(())
+    }
+}
+impl FromStr for PackageSpec {
+    type Err = MalformedPackageSpec;
+    fn from_str(s: &str) -> Result<PackageSpec, MalformedPackageSpec> {
+        let mut remaining = s;
+        let url = if let Some(url_sep) = remaining.find('#') {
+            remaining = &remaining[url_sep + 1..];
+            // We make no attempt at URL validation
+            Some(&s[..url_sep])
+        } else { None };
+        let (name, version) = if let Some(version_sep) = remaining.find(':') {
+            (Some(&remaining[..version_sep]), Some(remaining[version_sep + 1..].parse::<semver::Version>()?))
+        } else {
+            // Both of the following are valid pkgids:
+            // url#version
+            // url#name
+            //
+            // we know how to parse versions, so try that first
+            if let Ok(ver) = remaining.parse::<Version>() {
+                (None, Some(ver))
+            } else {
+                (Some(remaining), None) // url#name
+            }
+
+        };
+        Ok(PackageSpec {
+            source: url.map(String::from),
+            version, name: name.map(String::from),
+            resolved_id: Default::default()
+        })
+    }
+}
+#[non_exhaustive]
+#[derive(thiserror::Error, Debug)]
+pub enum MalformedPackageSpec {
+    #[error("Unsupported spec: {reason}")]
+    UnsupportedSpec {
+        reason: &'static str
+    },
+    #[error("Invalid version in pkgid spec")]
+    InvalidVersion {
+        #[from]
+        source: semver::Error
+    },
+}
 impl<'a> Index<&'a PackageId> for AnalysedMetadata {
-    type Output = Package;
-    fn index(&self, id: &'a PackageId) -> &'_ Package {
+    type Output = AnalysedPackage;
+    fn index(&self, id: &'a PackageId) -> &'_ AnalysedPackage {
         &self.packages[id]
     }
 }
 
+
+/// Resolve the specified package specification by running `cargo pkgid`
+///
+/// Failsw ith 
+pub fn resolve_pkg_spec(spec: Option<&str>) -> anyhow::Result<PackageSpec> {
+    let mut cmd = Command::new(cargo_path());
+    cmd.arg("pkgid");
+    if let Some(spec) = spec{ 
+        cmd.arg("--").arg(spec);
+    }
+    let output = cmd.output()
+        .context("")?;
+    if output.status.success() {
+        let out = String::from_utf8(output.stdout)
+            .expect("cargo pkgid did not return valid UTF8");
+        Ok(out.trim_end_matches(&['\r', '\n']).parse::<PackageSpec>()
+            .unwrap_or_else(|e| panic!("Unable to parse pkgid {:?}: {}", out, e)))
+    } else {
+        Err(anyhow::Error::from(PackageResolveError {
+            spec: spec.map(String::from),
+            message: String::from_utf8(output.stderr).expect("cargo pkgid did not return valid UTF8")
+        }))
+    }
+}
+/// A package resolve error
+#[derive(Debug, thiserror::Error)]
+#[error("Unable to resolve {}", spec.as_ref().map_or("current direcotry", String::as_str))]
+pub struct PackageResolveError {
+    spec: Option<String>,
+    message: String
+}
+
+
+#[derive(Debug)]
 enum TargetPackages<'a> {
     All,
     Workspace,
@@ -164,38 +421,13 @@ enum TargetPackages<'a> {
     Explicit(&'a [String]),
 }
 impl<'a> TargetPackages<'a> {
-    fn collect_set(&self, meta: &AnalysedMetadata) -> Result<IndexSet<PackageId>, anyhow::Error> {
+    fn collect_explicit_packages(&self, meta: &AnalysedMetadata) -> Result<Vec<PackageSpec>, anyhow::Error> {
         match *self {
-            TargetPackages::All => Ok(meta.all_packages().cloned().collect()),
-            TargetPackages::Workspace => Ok(meta.workspace_packages.clone()),
-            TargetPackages::Current => match meta.current_package {
-                Some(ref current) => Ok(indexmap::indexset! {current.clone()}),
-                None => anyhow::bail!("Unable to detect current package"),
-            },
+            TargetPackages::Current => Ok(vec![resolve_pkg_spec(None)?]),
             TargetPackages::Explicit(specs) => {
-                let mut res = IndexSet::with_capacity(specs.len());
-                for spec in specs {
-                    // Check if it matches any of the names we know
-                    match meta.get_by_name(spec) {
-                        Some(id) => {
-                            // Great! add it
-                            res.insert(id.clone());
-                        }
-                        None => {
-                            // Give suggestions on which packages do match
-                            // TODO: Handle more precise pkgid (`cargo pkgid`)
-                            let mut msg = format!("Unknown package {:?}", spec);
-                            if let Some(suggestion) =
-                                suggestions::did_you_mean(spec, meta.all_packages_names()).get(0)
-                            {
-                                write!(msg, ". Did you mean {:?}?", suggestion).unwrap();
-                            }
-                            return Err(anyhow::anyhow!(msg));
-                        }
-                    }
-                }
-                Ok(res)
-            }
+                specs.iter().map(|spec| resolve_pkg_spec(Some(&**spec))).collect()
+            },
+            _ => unreachable!("Not explicit spec: {:?}", self)
         }
     }
     #[inline]
@@ -226,7 +458,6 @@ fn main() -> anyhow::Result<()> {
         .context("Failed to execute `cargo metadata`")?;
     let metadata = AnalysedMetadata::analyse(metadata);
     let target = cli.target();
-    let packages = target.collect_set(&metadata)?;
     let mut check = Command::new(cargo_path());
     let quiet = !cli.verbose && (cli.quiet || atty::isnt(atty::Stream::Stderr));
     let include_missing_outdirs = match (cli.include_missing_outdirs, cli.skip_missing_outdirs) {
@@ -243,15 +474,20 @@ fn main() -> anyhow::Result<()> {
         }
     };
     check.arg("check").arg("--message-format=json");
-    if target.is_explicit()
-        && packages
-            .iter()
-            .all(|pkg| metadata.workspace_packages.contains(pkg))
-    {
-        for pkg in &packages {
+    if target.is_explicit() {
+        let packages = match target.collect_explicit_packages(&metadata) {
+            Ok(pkgs) => pkgs,
+            Err(e) if e.is::<PackageResolveError>() => {
+                // Print the cargo error message and exit
+                eprintln!("{}", &e.downcast_ref::<PackageResolveError>().unwrap().message);
+                std::process::exit(1);
+            }
+            Err(other) => return Err(other)
+        };
+
+        for spec in &packages {
             check.arg("-p");
-            // Just specify the name and let cargo figure it out :)
-            check.arg(&metadata[pkg].name);
+            check.arg(spec.to_string());
         }
     } else {
         // Just run the whole workspace then filter ;)
@@ -269,7 +505,7 @@ fn main() -> anyhow::Result<()> {
     // Begin the processing of the json
     let mut deser = Deserializer::from_reader(child.stdout.take().unwrap()).into_iter::<Value>();
     let build_script_reason = serde_json::json!("build-script-executed");
-    let mut out_dirs = IndexMap::with_capacity(packages.len());
+    let mut out_dirs = IndexMap::with_capacity(metadata.packages.len());
     while let Some(value) = deser
         .next()
         .transpose()
@@ -320,9 +556,8 @@ fn main() -> anyhow::Result<()> {
     let mut problem = None;
 
     if check_status.success() {
-        let out_dirs = packages
-            .iter()
-            .map(|pkg| (pkg.clone(), out_dirs.get(pkg).and_then(|o| o.as_ref())))
+        let out_dirs = metadata.packages.keys()
+            .map(|pkg| (pkg, out_dirs.get(pkg).and_then(|o| o.as_ref())))
             .filter(|(_pkg, out_dir)| include_missing_outdirs || out_dir.is_some())
             .collect::<IndexMap<_, _>>();
         if out_dirs.is_empty() {
@@ -331,11 +566,15 @@ fn main() -> anyhow::Result<()> {
         if cli.json {
             // Json mode ignores problems (open an issue if this is not what you want)
             problem = None;
+            let serialzied = out_dirs.iter()
+                .map(|(pkg, out_dir)| out_dir)
+                .collect::<IndexMap<_, _>>();
+            // Convert to traditional pkgid as recognized by `cargo pkgid`
             serde_json::to_writer(io::stdout(), &out_dirs).expect("Failed to write output");
             io::stdout().write_all(b"\n").unwrap();
         } else {
-            for (pkg_id, out_dir) in out_dirs.iter() {
-                let pkg = &metadata[pkg_id];
+            for (&id, out_dir) in out_dirs.iter() {
+                let pkg = &metadata[id];
                 if !cli.no_names {
                     print!("{} ", &pkg.name);
                 }

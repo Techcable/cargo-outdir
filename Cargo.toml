@@ -18,15 +18,17 @@ clap = { version = "3.0", features = ["derive"] }
 clap-cargo = { version = "0.8", features = ["cargo_metadata"] }
 # Parsing cargo metadata
 cargo_metadata = "0.14"
+semver = "1"
 
 # indexmap (we want output to preserve order in our output maps)
 indexmap = { version = "1", features = ["serde"] }
 # Errors
 anyhow = "1"
-# Used to give similarity suggestions (did you mean <other crate>?)
-strsim = "0.10"
+thiserror = "1"
 # Used to check terminal vs script (setting the default for --quiet)
 atty = "0.2"
+# Used to lazy-load some metadata
+once_cell = "1"
 
 # Serialize
 serde = { version = "1", features = ["derive"] }
