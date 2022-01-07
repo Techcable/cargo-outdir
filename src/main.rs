@@ -15,7 +15,7 @@ use cargo_metadata::{PackageId};
 use clap::Parser;
 
 mod spec;
-use spec::{resolve_pkg_spec, AnalysedMetadata, PackageSpec, cargo_path, PackageResolveError};
+use spec::{resolve_pkg_spec, AnalysedMetadata, PackageSpec, cargo_path};
 
 /// Detects the `$OUT_DIR` for build script outputs.
 ///
@@ -178,20 +178,8 @@ fn main() -> anyhow::Result<()> {
         }
     };
     check.arg("check").arg("--message-format=json");
-    if target.is_explicit() {
-        let packages = match target.collect_explicit_package_specs(&metadata) {
-            Ok(pkgs) => pkgs,
-            Err(e) if e.is::<PackageResolveError>() => {
-                // Print the cargo error message and exit
-                eprintln!("{}", &e.downcast_ref::<PackageResolveError>().unwrap().message);
-                std::process::exit(1);
-            }
-            Err(other) => return Err(other)
-        };
-        for spec in &packages {
-            check.arg("-p");
-            check.arg(spec.to_string());
-        }
+    if matches!(target, TargetPackages::Current) {
+        // Implicitly restrict to the working directory
     } else {
         // Just run the whole workspace then filter ;)
         check.arg("--workspace");

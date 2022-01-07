@@ -320,7 +320,7 @@ pub fn resolve_pkg_spec(spec: Option<&str>) -> anyhow::Result<PackageSpec> {
 }
 /// A package resolve error
 #[derive(Debug, thiserror::Error)]
-#[error("Unable to resolve {}", spec.as_ref().map_or("current direcotry", String::as_str))]
+#[error("{}", message)]
 pub struct PackageResolveError {
     spec: Option<String>,
     pub message: String
