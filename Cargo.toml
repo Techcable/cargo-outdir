@@ -9,6 +9,8 @@ keywords = ["cargo", "subcommand", "out-dir", "cli", "cargo-out", "cargo-out-dir
 categories = ["development-tools::cargo-plugins", "development-tools::build-utils", "command-line-utilities"]
 edition = "2021"
 readme = "README.md"
+# Not ready for release yet
+publish = false
 
 [dependencies]
 clap = { version = "3.0", features = ["derive"] }

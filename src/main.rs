@@ -2,12 +2,13 @@
 #![warn(clippy::doc_markdown)]
 
 use std::collections::HashMap;
-use std::env;
+use std::ffi::OsStr;
 use std::fmt::Write as FmtWrite;
 use std::io::{self, Read, Write};
 use std::ops::Index;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::{env, iter};
 
 use anyhow::Context;
 use indexmap::{IndexMap, IndexSet};
@@ -38,13 +39,13 @@ struct Cli {
     manifest: clap_cargo::Manifest,
     #[clap(flatten)]
     features: clap_cargo::Features,
-    /// Be more verbose, outputting more warnings 
+    /// Be more verbose, outputting more warnings
     ///
     /// By default, messages are suppressed unless a build error occurrs.
     #[clap(long, short)]
     verbose: bool,
     /// Supress output from cargo check
-    /// 
+    ///
     /// This is the default if stdout is not a terminal.
     #[clap(long, short)]
     quiet: bool,
@@ -68,7 +69,7 @@ struct Cli {
     )]
     no_names: bool,
     /// Skip packages that are missing outdirs (dont have build scripts).
-    /// 
+    ///
     /// This is the default when using `--workspace` or `--all` (and not specifying `--json`)
     ///
     /// If no packages are found with outdirs, this will exit with an error (2).
@@ -77,7 +78,7 @@ struct Cli {
     /// Include packages that are missing outdirs (ones that don't have build scripts).
     ///
     /// This is the default when using `--current` or an explicit list of packages.
-    /// 
+    ///
     #[clap(long = "include-missing", conflicts_with = "skip-missing-outdirs")]
     include_missing_outdirs: bool,
     /// Process *all* the possible packages, including transitive dependencies.
@@ -210,7 +211,14 @@ fn cargo_path() -> PathBuf {
 }
 
 fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    let mut args = env::args_os().peekable();
+    let binary_name = args.next().expect("Should have binary name"); // Skip binary name
+    if args.peek().map(OsStr::new) == Some(OsStr::new("outdir")) {
+        // We're running under cargo!
+        args.next();
+    }
+    let args = iter::once(binary_name).chain(args).collect::<Vec<_>>();
+    let cli = Cli::parse_from(args);
     let mut metadata_command = cli.manifest.metadata();
     cli.features.forward_metadata(&mut metadata_command);
     let metadata = metadata_command
@@ -222,7 +230,9 @@ fn main() -> anyhow::Result<()> {
     let mut check = Command::new(cargo_path());
     let quiet = !cli.verbose && (cli.quiet || atty::isnt(atty::Stream::Stderr));
     let include_missing_outdirs = match (cli.include_missing_outdirs, cli.skip_missing_outdirs) {
-        (true, true) => anyhow::bail!("Cannot specify to both include and skip packages that are missing outdirs"),
+        (true, true) => anyhow::bail!(
+            "Cannot specify to both include and skip packages that are missing outdirs"
+        ),
         (true, false) => true,
         (false, true) => false,
         (false, false) => {
@@ -233,7 +243,11 @@ fn main() -> anyhow::Result<()> {
         }
     };
     check.arg("check").arg("--message-format=json");
-    if target.is_explicit() && packages.iter().all(|pkg| metadata.workspace_packages.contains(pkg)) {
+    if target.is_explicit()
+        && packages
+            .iter()
+            .all(|pkg| metadata.workspace_packages.contains(pkg))
+    {
         for pkg in &packages {
             check.arg("-p");
             // Just specify the name and let cargo figure it out :)
@@ -305,7 +319,6 @@ fn main() -> anyhow::Result<()> {
     let check_status = child.wait().context("`cargo check` exited abnormally")?;
     let mut problem = None;
 
-
     if check_status.success() {
         let out_dirs = packages
             .iter()
@@ -347,22 +360,22 @@ fn main() -> anyhow::Result<()> {
     }
     match problem {
         Some(Problem::MissingOutDir) => {
-            if !quiet{
-                eprintln!("ERROR: Some packages are missing $OUT_DIR (or build scripts)");
+            if !quiet {
+                eprintln!("ERROR: Some of the specified crates are missing an $OUT_DIR (or don't have build scripts)");
             }
             std::process::exit(2);
         }
         Some(Problem::NothingToPrint) => {
             if !quiet {
-                eprintln!("ERROR: None of the packages have an an $OUT_DIR (or build scripts)");
+                eprintln!("ERROR: None of the specified packages have an an $OUT_DIR (or don't have build scripts)");
             }
             std::process::exit(2);
-        },
-        None => Ok(())
+        }
+        None => Ok(()),
     }
 }
 
 enum Problem {
     MissingOutDir,
-    NothingToPrint
+    NothingToPrint,
 }
