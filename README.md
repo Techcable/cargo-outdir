@@ -6,9 +6,11 @@ This is extremely useful to inspect the output of automatically generated code, 
 
 This can be seen as an extension to `cargo metadata`, except it requires that `cargo check` succeeds.
 
-If `cargo check` succeeds, then this command succeeds to (and give the same output).
+If `cargo check` succeeds, then this command succeeds too (and give the same output).
 
 Due to recent changes in `cargo check`, this *will not invalidate cached outputs*, so the build scripts wont be re-run unless they need to :)
+
+It is effectively a workaround to [rust-lang/cargo#7546](https://github.com/rust-lang/cargo/issues/7546)
 
 ## Examples
 #### `$ cargo out`
@@ -33,11 +35,13 @@ If the package doesn't have an out dir, the output will be "<MISSING OUT_DIR>" e
 
 
 You might want to consider json output as well.
-#### `$ cargo out --json --all` (or `cargo out --json --workspace` for only [workspace](https://doc.rust-lang.org/cargo/reference/workspaces.html) packages)
+#### `$ cargo out --json --all`
 `````json
 {
     "syn": "/Users/techcable/git/current-crate/target/debug/build/syn-2bbc24a01fc81726/out",
     "indexmap": "/Users/techcable/git/current-crate/target/debug/build/indexmap-376e9f234cf30ee8/out",
+    "libc:0.1.12": null,
+    "libc:0.2.109": "/Users/techcable/git/current-crate/target/debug/build/libc-1c95e0902b980b08/out",
     // other_crates here
 }
 `````
@@ -46,7 +50,7 @@ If packages don't have an $OUT_DIR (because they don't have a build script), the
 
 This can be used along with [jq](https://stedolan.github.io/jq/) for easy processing in scripts :)
 
-Other information like package versions are excluded, because that can easily be retrieved from `cargo metadata`.
+If multiple packages have the same name, then version will be added. More precicely, the json keys will be the minimal `cargo pkgid` needed to disambiguate them. This is actually [somewhat difficult to do](./src/spec.rs) :)
 
 ## How it works
 This runs `cargo check --message-format=json` and extracts only the nessicarry information.

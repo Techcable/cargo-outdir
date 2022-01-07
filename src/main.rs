@@ -8,14 +8,14 @@ use std::{env, iter};
 
 use anyhow::Context;
 use indexmap::{IndexMap, IndexSet};
-use serde::{Deserialize};
+use serde::Deserialize;
 use serde_json::{Deserializer, Value};
 
-use cargo_metadata::{PackageId};
+use cargo_metadata::PackageId;
 use clap::Parser;
 
 mod spec;
-use spec::{resolve_pkg_spec, AnalysedMetadata, PackageSpec, cargo_path};
+use spec::{cargo_path, resolve_pkg_spec, AnalysedMetadata, PackageSpec};
 
 /// Detects the `$OUT_DIR` for build script outputs.
 ///
@@ -111,7 +111,6 @@ impl Cli {
     }
 }
 
-
 #[derive(Debug)]
 enum TargetPackages<'a> {
     All,
@@ -120,23 +119,34 @@ enum TargetPackages<'a> {
     Explicit(&'a [String]),
 }
 impl<'a> TargetPackages<'a> {
-    fn collect_packages(&self, meta: &AnalysedMetadata) -> Result<IndexSet<PackageId>, anyhow::Error> {
+    fn collect_packages(
+        &self,
+        meta: &AnalysedMetadata,
+    ) -> Result<IndexSet<PackageId>, anyhow::Error> {
         match *self {
             TargetPackages::All => Ok(meta.packages.iter().map(|pkg| &pkg.id).cloned().collect()),
             TargetPackages::Workspace => Ok(meta.workspace_members.iter().cloned().collect()),
             TargetPackages::Current | TargetPackages::Explicit(_) => {
                 let specs = self.collect_explicit_package_specs(meta)?;
-                Ok(specs.iter().map(|spec| meta.find_matching_id(spec)).cloned().collect())
+                Ok(specs
+                    .iter()
+                    .map(|spec| meta.find_matching_id(spec))
+                    .cloned()
+                    .collect())
             }
         }
     }
-    fn collect_explicit_package_specs(&self, _meta: &AnalysedMetadata) -> Result<Vec<PackageSpec>, anyhow::Error> {
+    fn collect_explicit_package_specs(
+        &self,
+        _meta: &AnalysedMetadata,
+    ) -> Result<Vec<PackageSpec>, anyhow::Error> {
         match *self {
             TargetPackages::Current => Ok(vec![resolve_pkg_spec(None)?]),
-            TargetPackages::Explicit(specs) => {
-                specs.iter().map(|spec| resolve_pkg_spec(Some(&**spec))).collect()
-            },
-            _ => unreachable!("Not explicit spec: {:?}", self)
+            TargetPackages::Explicit(specs) => specs
+                .iter()
+                .map(|spec| resolve_pkg_spec(Some(&**spec)))
+                .collect(),
+            _ => unreachable!("Not explicit spec: {:?}", self),
         }
     }
     #[inline]
@@ -144,7 +154,6 @@ impl<'a> TargetPackages<'a> {
         matches!(*self, TargetPackages::Explicit(_) | TargetPackages::Current)
     }
 }
-
 
 fn main() -> anyhow::Result<()> {
     let mut args = env::args_os().peekable();
@@ -248,8 +257,14 @@ fn main() -> anyhow::Result<()> {
     let mut problem = None;
 
     if check_status.success() {
-        let out_dirs = desired_packages.iter()
-            .map(|id| (metadata.determine_spec(id), out_dirs.get(id).and_then(|o| o.as_ref())))
+        let out_dirs = desired_packages
+            .iter()
+            .map(|id| {
+                (
+                    metadata.determine_spec(id),
+                    out_dirs.get(id).and_then(|o| o.as_ref()),
+                )
+            })
             .filter(|(_pkg, out_dir)| include_missing_outdirs || out_dir.is_some())
             .collect::<IndexMap<_, _>>();
         if out_dirs.is_empty() {
@@ -262,7 +277,7 @@ fn main() -> anyhow::Result<()> {
             serde_json::to_writer(io::stdout(), &out_dirs).expect("Failed to write output");
             io::stdout().write_all(b"\n").unwrap();
         } else {
-            for (&spec , out_dir) in out_dirs.iter() {
+            for (&spec, out_dir) in out_dirs.iter() {
                 if !cli.no_names {
                     print!("{} ", spec.name.as_ref().unwrap());
                 }

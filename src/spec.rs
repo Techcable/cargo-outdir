@@ -11,38 +11,42 @@
 //! It also contains an [AnalysedMetadata], which is a wrapper around `cargo metadata`
 //! which can be used to output the "minimal" package spec.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
+use std::fmt::{self, Display, Formatter};
 use std::ops::{Deref, Index};
 use std::path::PathBuf;
-use std::process::{Command};
+use std::process::Command;
 use std::str::FromStr;
-use std::fmt::{self, Display, Formatter};
-use std::cell::Cell;
 
-use once_cell::unsync::OnceCell;
 use anyhow::Context;
-use serde::{Serialize};
+use once_cell::unsync::OnceCell;
+use serde::Serialize;
 
 use cargo_metadata::{Metadata, Package, PackageId, Source, Version};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PackageConflictKind {
-    /// Multiple packages with the same name 
+    /// Multiple packages with the same name
     Names,
     /// Multiple packages with the smae version
-    Version
+    Version,
 }
 
 pub struct AnalysedPackage {
     metadata: Package,
     conflicts: Cell<Option<PackageConflictKind>>,
     // Lazy loaded
-    minimal_spec: OnceCell<PackageSpec>
+    minimal_spec: OnceCell<PackageSpec>,
 }
 impl AnalysedPackage {
     pub fn matches(&self, spec: &PackageSpec) -> bool {
-        assert!(spec.name.is_some() || spec.version.is_some() || spec.source.is_some(), "Invalid spec: {:?}", spec);
+        assert!(
+            spec.name.is_some() || spec.version.is_some() || spec.source.is_some(),
+            "Invalid spec: {:?}",
+            spec
+        );
         if let Some(ref name) = spec.name {
             if self.name != *name {
                 return false;
@@ -57,9 +61,9 @@ impl AnalysedPackage {
             match self.source {
                 Some(ref src) => {
                     if &*expected_src != PackageSpec::source_as_url(src) {
-                        return false
+                        return false;
                     }
-                },
+                }
                 None => {}
             }
         }
@@ -89,32 +93,43 @@ impl Deref for AnalysedMetadata {
 impl AnalysedMetadata {
     pub fn analyse(meta: Metadata) -> Self {
         let packages = meta
-            .packages.iter().cloned()
-            .map(|pkg| (pkg.id.clone(), AnalysedPackage { metadata: pkg, minimal_spec: OnceCell::default(), conflicts: Cell::new(None) }))
+            .packages
+            .iter()
+            .cloned()
+            .map(|pkg| {
+                (
+                    pkg.id.clone(),
+                    AnalysedPackage {
+                        metadata: pkg,
+                        minimal_spec: OnceCell::default(),
+                        conflicts: Cell::new(None),
+                    },
+                )
+            })
             .collect::<HashMap<_, _>>();
         let mut by_name: HashMap<String, Vec<PackageId>> = HashMap::with_capacity(packages.len());
-        for (id , pkg) in packages.iter() {
-            let matching_names = by_name.entry(pkg.name.clone())
-                .or_insert_with(Vec::new);
+        for (id, pkg) in packages.iter() {
+            let matching_names = by_name.entry(pkg.name.clone()).or_insert_with(Vec::new);
             matching_names.push(id.clone());
             match matching_names.len() {
                 0 => unreachable!(),
                 1 => {
                     // No conflicts, because we're the only entry
                     continue;
-                },
+                }
                 2 => {
                     // Mark the previous entry as a name conflict
                     let first = &packages[&matching_names[0]];
                     assert_eq!(first.conflicts.get(), None);
                     first.conflicts.set(Some(PackageConflictKind::Names));
-                },
+                }
                 _ => {} // If we had 2 before, they're already marked as conflicts
             }
             // Mark the new entry as a name conflict
             pkg.conflicts.set(Some(PackageConflictKind::Names));
             // Check for possible duplicates with the same name
-            let has_matching_versions = matching_names.iter()
+            let has_matching_versions = matching_names
+                .iter()
                 .filter(|&other_id| other_id != id)
                 .any(|other_pkg_id| {
                     let other_pkg = &packages[other_pkg_id];
@@ -130,19 +145,20 @@ impl AnalysedMetadata {
                 pkg.conflicts.set(Some(PackageConflictKind::Version));
             }
         }
-        AnalysedMetadata {
-            packages, meta
-        }
+        AnalysedMetadata { packages, meta }
     }
     pub fn find_matching_id(&self, spec: &PackageSpec) -> &'_ PackageId {
         // Assumed to be unambiguous
-        let matches = self.packages.iter().filter(|(_id, pkg)| pkg.matches(spec))
+        let matches = self
+            .packages
+            .iter()
+            .filter(|(_id, pkg)| pkg.matches(spec))
             .map(|(id, _)| id)
             .collect::<Vec<_>>();
         match matches.len() {
             0 => panic!("No matches for {}", spec),
             1 => &matches[0],
-            _ => panic!("Multiple matches for {}: {:?}", spec, matches)
+            _ => panic!("Multiple matches for {}: {:?}", spec, matches),
         }
     }
     /// Determine the minimal specification required to refer to the specified [PackageId]
@@ -157,11 +173,11 @@ impl AnalysedMetadata {
             match pkg.conflicts.get() {
                 None => {
                     // The name is sufficent
-                },
+                }
                 Some(PackageConflictKind::Names) => {
                     // Add in version to disambiguate
                     res.version = Some(pkg.version.clone());
-                },
+                }
                 Some(PackageConflictKind::Version) => {
                     // Add in version and source to disambiguate
                     res.version = Some(pkg.version.clone());
@@ -187,7 +203,7 @@ pub fn cargo_path() -> PathBuf {
 /// The specification of a package as given by `cargo pkgid`.  
 ///
 /// This is *NOT* a [`cargo_metadata::PackageId`], because it is valid input (or output) for `cargo pkgid`
-/// 
+///
 ///
 /// When used with [AnalysedMetadata], it is also normalized to the simplest unambigous form.
 ///
@@ -202,12 +218,13 @@ pub fn cargo_path() -> PathBuf {
 pub struct PackageSpec {
     pub name: Option<String>,
     version: Option<Version>,
-    source: Option<String>
+    source: Option<String>,
 }
 impl Serialize for PackageSpec {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer {
+        S: serde::Serializer,
+    {
         self.to_string().serialize(serializer)
     }
 }
@@ -251,9 +268,14 @@ impl FromStr for PackageSpec {
             remaining = &remaining[url_sep + 1..];
             // We make no attempt at URL validation
             Some(&s[..url_sep])
-        } else { None };
+        } else {
+            None
+        };
         let (name, version) = if let Some(version_sep) = remaining.find(':') {
-            (Some(&remaining[..version_sep]), Some(remaining[version_sep + 1..].parse::<semver::Version>()?))
+            (
+                Some(&remaining[..version_sep]),
+                Some(remaining[version_sep + 1..].parse::<semver::Version>()?),
+            )
         } else {
             // Both of the following are valid pkgids:
             // url#version
@@ -265,14 +287,14 @@ impl FromStr for PackageSpec {
             } else {
                 (Some(remaining), None) // url#name
             }
-
         };
         if url.is_none() && name.is_none() {
             return Err(MalformedPackageSpec::MissingName);
         }
         Ok(PackageSpec {
             source: url.map(String::from),
-            version, name: name.map(String::from),
+            version,
+            name: name.map(String::from),
         })
     }
 }
@@ -284,7 +306,7 @@ pub enum MalformedPackageSpec {
     #[error("Invalid version in pkgid spec")]
     InvalidVersion {
         #[from]
-        source: semver::Error
+        source: semver::Error,
     },
 }
 impl<'a> Index<&'a PackageId> for AnalysedMetadata {
@@ -294,27 +316,27 @@ impl<'a> Index<&'a PackageId> for AnalysedMetadata {
     }
 }
 
-
 /// Resolve the specified package specification by running `cargo pkgid`
 ///
-/// Failsw ith 
+/// Failsw ith
 pub fn resolve_pkg_spec(spec: Option<&str>) -> anyhow::Result<PackageSpec> {
     let mut cmd = Command::new(cargo_path());
     cmd.arg("pkgid");
-    if let Some(spec) = spec{ 
+    if let Some(spec) = spec {
         cmd.arg("--").arg(spec);
     }
-    let output = cmd.output()
-        .context("")?;
+    let output = cmd.output().context("")?;
     if output.status.success() {
-        let out = String::from_utf8(output.stdout)
-            .expect("cargo pkgid did not return valid UTF8");
-        Ok(out.trim_end().parse::<PackageSpec>()
+        let out = String::from_utf8(output.stdout).expect("cargo pkgid did not return valid UTF8");
+        Ok(out
+            .trim_end()
+            .parse::<PackageSpec>()
             .unwrap_or_else(|e| panic!("Unable to parse pkgid {:?}: {}", out, e)))
     } else {
         Err(anyhow::Error::from(PackageResolveError {
             spec: spec.map(String::from),
-            message: String::from_utf8(output.stderr).expect("cargo pkgid did not return valid UTF8")
+            message: String::from_utf8(output.stderr)
+                .expect("cargo pkgid did not return valid UTF8"),
         }))
     }
 }
@@ -323,5 +345,5 @@ pub fn resolve_pkg_spec(spec: Option<&str>) -> anyhow::Result<PackageSpec> {
 #[error("{}", message)]
 pub struct PackageResolveError {
     spec: Option<String>,
-    pub message: String
+    pub message: String,
 }

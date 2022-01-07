@@ -5,12 +5,10 @@ authors = ["Techcable <Techcable@techcable.net>"]
 license = "MIT OR Apache-2.0"
 description = "A cargo subcommand to get the $OUT_DIR environment variable from build scripts."
 repository = "https://github.com/Techcable/cargo-out"
-keywords = ["cargo", "subcommand", "out-dir", "cli", "cargo-out", "cargo-out-dir", "OUT_DIR"]
+keywords = ["cargo", "out-dir", "subcommand", "outdir", "OUT_DIR"]
 categories = ["development-tools::cargo-plugins", "development-tools::build-utils", "command-line-utilities"]
 edition = "2021"
 readme = "README.md"
-# Not ready for release yet
-publish = false
 
 [dependencies]
 clap = { version = "3.0", features = ["derive"] }
