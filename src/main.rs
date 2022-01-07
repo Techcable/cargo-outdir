@@ -8,7 +8,7 @@ use std::io::{self, Read, Write};
 use std::ops::{Deref, Index};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::{any, env, iter};
+use std::{env, iter};
 use std::str::FromStr;
 use std::fmt::{self, Display, Formatter};
 use std::cell::Cell;
@@ -131,8 +131,8 @@ struct AnalysedPackage {
     minimal_spec: OnceCell<PackageSpec>
 }
 impl AnalysedPackage {
-    pub fn matches(&self, spec: &PackageSpec) {
-        assert!(spec.name.is_some() || spec.version.is_some() || spec.source.is_some(), "Invalid spec: {:?}", spec)
+    pub fn matches(&self, spec: &PackageSpec) -> bool {
+        assert!(spec.name.is_some() || spec.version.is_some() || spec.source.is_some(), "Invalid spec: {:?}", spec);
         if let Some(ref name) = spec.name {
             if self.name != *name {
                 return false;
@@ -146,14 +146,14 @@ impl AnalysedPackage {
         if let Some(ref expected_src) = spec.source {
             match self.source {
                 Some(ref src) => {
-                    let plus_offset = src.repr.find('+').unwrap_or_else(|| panic!("Unexpected source: {}", src));
-                    if &*expected_src != &*src.repr[plus_offset + 1..] {
+                    if &*expected_src != PackageSpec::source_as_url(src) {
                         return false
                     }
                 },
-                None => return false,
+                None => {}
             }
         }
+        true
     }
 }
 impl Deref for AnalysedPackage {
@@ -167,15 +167,13 @@ impl Deref for AnalysedPackage {
 struct AnalysedMetadata {
     packages: HashMap<PackageId, AnalysedPackage>,
     workspace_packages: IndexSet<PackageId>,
-    current_package: Option<PackageId>,
 }
 impl AnalysedMetadata {
     pub fn analyse(mut meta: Metadata) -> Self {
-        let current_package = meta.resolve.take().and_then(|resolved| resolved.root);
         let packages = meta
             .packages
             .drain(..)
-            .map(|pkg| (pkg.id.clone(), AnalysedPackage { metadata: pkg, spec: OnceCell::default(), conflicts: Cell::new(None) }))
+            .map(|pkg| (pkg.id.clone(), AnalysedPackage { metadata: pkg, minimal_spec: OnceCell::default(), conflicts: Cell::new(None) }))
             .collect::<HashMap<_, _>>();
         let mut by_name: HashMap<String, Vec<PackageId>> = HashMap::with_capacity(packages.len());
         for (id , pkg) in packages.iter() {
@@ -217,24 +215,26 @@ impl AnalysedMetadata {
         }
         let workspace_packages = meta.workspace_members.drain(..).collect();
         AnalysedMetadata {
-            current_package,
             workspace_packages,
             packages,
         }
     }
-    /// Determine the id corresponding to the specified psec
-    pub fn determine_id(&self, spec: &PackageSpec) -> &'_ PackageId {
-        // TODO: Care
-        for pkg in self.packages.keys() {
-            if pkg
+    pub fn find_matching_id(&self, spec: &PackageSpec) -> &'_ PackageId {
+        // Assumed to be unambiguous
+        let matches = self.packages.iter().filter(|(_id, pkg)| pkg.matches(spec))
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        match matches.len() {
+            0 => panic!("No matches for {}", spec),
+            1 => &matches[0],
+            _ => panic!("Multiple matches for {}: {:?}", spec, matches)
         }
     }
     /// Determine the minimal specification required to refer to the specified [PackageId]
     pub fn determine_spec(&self, id: &PackageId) -> &'_ PackageSpec {
         let pkg = &self.packages[id];
-        pkg.spec.get_or_init(|| {
+        pkg.minimal_spec.get_or_init(|| {
             let mut res = PackageSpec {
-                resolved_id: OnceCell::from(id.clone()),
                 name: Some(pkg.name.clone()),
                 version: None,
                 source: None,
@@ -251,27 +251,15 @@ impl AnalysedMetadata {
                     // Add in version and source to disambiguate
                     res.version = Some(pkg.version.clone());
                     if let Some(ref src) = pkg.source {
-                        if let Some(idx) = src.repr.find('+') {
-                            res.source = Some(String::from(&src.repr[idx + 1..]))
-                        } else {
-                            panic!("Unexpected source {:?} for {:?}", src.repr, id);
-                        }
+                        res.source = Some(String::from(PackageSpec::source_as_url(src)));
                         assert!(res.is_fully_qualified());
                     } else {
-                        // If we don't have a 'source', just hope the other one does
+                        // If we don't have a 'source', just hope we're not ambigous..
                     }
                 }
             };
             res
         })
-    }
-    #[inline]
-    fn all_packages(&self) -> impl Iterator<Item = &'_ PackageId> + '_ {
-        self.packages.keys()
-    }
-    #[inline]
-    fn all_packages_names(&self) -> impl Iterator<Item = &'_ str> + '_ {
-        self.packages.values().map(|pkg| &*pkg.name)
     }
 }
 /// The specification of a package as given by `cargo pkgid`.  
@@ -304,7 +292,15 @@ impl Serialize for PackageSpec {
 impl PackageSpec {
     #[inline]
     pub fn from_name(name: String) -> Self {
-        PackageSpec { name: Some(name), version: None, source: None, resolved_id: Default::default() }
+        PackageSpec { name: Some(name), version: None, source: None }
+    }
+    pub fn source_as_url(source: &Source) -> &str {
+        let source = &source.repr;
+        if let Some(idx) = source.find('+') {
+            &source[idx + 1..]
+        } else {
+            panic!("Unexpected source: {:?}", source)
+        }
     }
     #[inline]
     fn is_fully_qualified(&self) -> bool {
@@ -318,7 +314,7 @@ impl Display for PackageSpec {
             f.write_char('#')?;
         }
         if let Some(ref name) = self.name {
-            f.write_str(name);
+            f.write_str(name)?;
         }
         if self.name.is_some() && self.version.is_some() {
             f.write_char(':')?;
@@ -353,16 +349,20 @@ impl FromStr for PackageSpec {
             }
 
         };
+        if url.is_none() && name.is_none() {
+            return Err(MalformedPackageSpec::MissingName);
+        }
         Ok(PackageSpec {
             source: url.map(String::from),
             version, name: name.map(String::from),
-            resolved_id: Default::default()
         })
     }
 }
 #[non_exhaustive]
 #[derive(thiserror::Error, Debug)]
 pub enum MalformedPackageSpec {
+    #[error("Missing name")]
+    MissingName,
     #[error("Unsupported spec: {reason}")]
     UnsupportedSpec {
         reason: &'static str
@@ -395,7 +395,7 @@ pub fn resolve_pkg_spec(spec: Option<&str>) -> anyhow::Result<PackageSpec> {
     if output.status.success() {
         let out = String::from_utf8(output.stdout)
             .expect("cargo pkgid did not return valid UTF8");
-        Ok(out.trim_end_matches(&['\r', '\n']).parse::<PackageSpec>()
+        Ok(out.trim_end().parse::<PackageSpec>()
             .unwrap_or_else(|e| panic!("Unable to parse pkgid {:?}: {}", out, e)))
     } else {
         Err(anyhow::Error::from(PackageResolveError {
@@ -421,7 +421,17 @@ enum TargetPackages<'a> {
     Explicit(&'a [String]),
 }
 impl<'a> TargetPackages<'a> {
-    fn collect_explicit_packages(&self, meta: &AnalysedMetadata) -> Result<Vec<PackageSpec>, anyhow::Error> {
+    fn collect_packages(&self, meta: &AnalysedMetadata) -> Result<IndexSet<PackageId>, anyhow::Error> {
+        match *self {
+            TargetPackages::All => Ok(meta.packages.keys().cloned().collect()),
+            TargetPackages::Workspace => Ok(meta.workspace_packages.clone()),
+            TargetPackages::Current | TargetPackages::Explicit(_) => {
+                let specs = self.collect_explicit_package_specs(meta)?;
+                Ok(specs.iter().map(|spec| meta.find_matching_id(spec)).cloned().collect())
+            }
+        }
+    }
+    fn collect_explicit_package_specs(&self, _meta: &AnalysedMetadata) -> Result<Vec<PackageSpec>, anyhow::Error> {
         match *self {
             TargetPackages::Current => Ok(vec![resolve_pkg_spec(None)?]),
             TargetPackages::Explicit(specs) => {
@@ -475,7 +485,7 @@ fn main() -> anyhow::Result<()> {
     };
     check.arg("check").arg("--message-format=json");
     if target.is_explicit() {
-        let packages = match target.collect_explicit_packages(&metadata) {
+        let packages = match target.collect_explicit_package_specs(&metadata) {
             Ok(pkgs) => pkgs,
             Err(e) if e.is::<PackageResolveError>() => {
                 // Print the cargo error message and exit
@@ -484,7 +494,6 @@ fn main() -> anyhow::Result<()> {
             }
             Err(other) => return Err(other)
         };
-
         for spec in &packages {
             check.arg("-p");
             check.arg(spec.to_string());
@@ -493,6 +502,7 @@ fn main() -> anyhow::Result<()> {
         // Just run the whole workspace then filter ;)
         check.arg("--workspace");
     }
+    let desired_packages = target.collect_packages(&metadata)?;
     if !quiet {
         eprintln!("Running `cargo check`:");
         check.stderr(Stdio::inherit());
@@ -556,8 +566,8 @@ fn main() -> anyhow::Result<()> {
     let mut problem = None;
 
     if check_status.success() {
-        let out_dirs = metadata.packages.keys()
-            .map(|pkg| (pkg, out_dirs.get(pkg).and_then(|o| o.as_ref())))
+        let out_dirs = desired_packages.iter()
+            .map(|id| (metadata.determine_spec(id), out_dirs.get(id).and_then(|o| o.as_ref())))
             .filter(|(_pkg, out_dir)| include_missing_outdirs || out_dir.is_some())
             .collect::<IndexMap<_, _>>();
         if out_dirs.is_empty() {
@@ -566,17 +576,13 @@ fn main() -> anyhow::Result<()> {
         if cli.json {
             // Json mode ignores problems (open an issue if this is not what you want)
             problem = None;
-            let serialzied = out_dirs.iter()
-                .map(|(pkg, out_dir)| out_dir)
-                .collect::<IndexMap<_, _>>();
             // Convert to traditional pkgid as recognized by `cargo pkgid`
             serde_json::to_writer(io::stdout(), &out_dirs).expect("Failed to write output");
             io::stdout().write_all(b"\n").unwrap();
         } else {
-            for (&id, out_dir) in out_dirs.iter() {
-                let pkg = &metadata[id];
+            for (&spec , out_dir) in out_dirs.iter() {
                 if !cli.no_names {
-                    print!("{} ", &pkg.name);
+                    print!("{} ", spec.name.as_ref().unwrap());
                 }
                 match out_dir {
                     Some(out) => {
