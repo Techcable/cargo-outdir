@@ -2,13 +2,13 @@
 //!
 //! These are the output of `cargo pkgid`, and the input to `cargo check -p <spec>`
 //!
-//! It is possible to have two versions of the same package. For example, "itertools:0.10.3"
-//!
+//! It is possible to have two versions of the same package.
+//! For example, `"itertools@0.10.3"` and `"itertools@0.15.0"`.
 //!
 //!
 //! This module contains a thin wrapper around `cargo pkgid` (for parsing user input).
 //!
-//! It also contains an [AnalysedMetadata], which is a wrapper around `cargo metadata`
+//! It also contains an [`AnalysedMetadata`], which is a wrapper around `cargo metadata`
 //! which can be used to output the "minimal" package spec.
 
 use std::cell::Cell;
@@ -57,14 +57,9 @@ impl AnalysedPackage {
                 return false;
             }
         }
-        if let Some(ref expected_src) = spec.source {
-            match self.source {
-                Some(ref src) => {
-                    if &*expected_src != PackageSpec::source_as_url(src) {
-                        return false;
-                    }
-                }
-                None => {}
+        if let (Some(ref expected_src), Some(ref src)) = (&spec.source, &self.source) {
+            if *expected_src != PackageSpec::source_as_url(src) {
+                return false;
             }
         }
         true
@@ -109,7 +104,7 @@ impl AnalysedMetadata {
             .collect::<HashMap<_, _>>();
         let mut by_name: HashMap<String, Vec<PackageId>> = HashMap::with_capacity(packages.len());
         for (id, pkg) in packages.iter() {
-            let matching_names = by_name.entry(pkg.name.clone()).or_insert_with(Vec::new);
+            let matching_names = by_name.entry(pkg.name.clone()).or_default();
             matching_names.push(id.clone());
             match matching_names.len() {
                 0 => unreachable!(),
@@ -157,11 +152,11 @@ impl AnalysedMetadata {
             .collect::<Vec<_>>();
         match matches.len() {
             0 => panic!("No matches for {}", spec),
-            1 => &matches[0],
+            1 => matches[0],
             _ => panic!("Multiple matches for {}: {:?}", spec, matches),
         }
     }
-    /// Determine the minimal specification required to refer to the specified [PackageId]
+    /// Determine the minimal specification required to refer to the specified [`PackageId`]
     pub fn determine_spec(&self, id: &PackageId) -> &'_ PackageSpec {
         let pkg = &self.packages[id];
         pkg.minimal_spec.get_or_init(|| {
@@ -204,8 +199,7 @@ pub fn cargo_path() -> PathBuf {
 ///
 /// This is *NOT* a [`cargo_metadata::PackageId`], because it is valid input (or output) for `cargo pkgid`
 ///
-///
-/// When used with [AnalysedMetadata], it is also normalized to the simplest unambigous form.
+/// When used with [`AnalysedMetadata`], it is also normalized to the simplest unambigous form.
 ///
 /// That is, if there's only one version of `syn`, the spec will be "syn".
 ///

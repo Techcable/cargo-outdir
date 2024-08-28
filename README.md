@@ -31,7 +31,7 @@ indexmap /Users/techcable/git/current-crate/target/debug/build/indexmap-376e9f23
 
 These are output in the order specified on the command line, seperated by newlines.
 
-If the package doesn't have an out dir, the output will be "<MISSING OUT_DIR>" exactly and the exit code will be `2`.
+If the package doesn't have an out dir, the output will be `"<MISSING OUT_DIR>"` exactly and the exit code will be `2`.
 
 
 You might want to consider json output as well.
@@ -46,7 +46,7 @@ You might want to consider json output as well.
 }
 `````
 
-If packages don't have an $OUT_DIR (because they don't have a build script), then the value for the specified key will be null. 
+If packages don't have an `$OUT_DIR` (because they don't have a build script), then the value for the specified key will be null. 
 
 This can be used along with [jq](https://stedolan.github.io/jq/) for easy processing in scripts :)
 

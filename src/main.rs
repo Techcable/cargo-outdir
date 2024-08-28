@@ -216,7 +216,7 @@ fn main() -> anyhow::Result<()> {
             if map.get("reason") == Some(&build_script_reason) {
                 let package_id = PackageId::deserialize(map["package_id"].clone()).unwrap();
                 let out_dir = match map.get("out_dir") {
-                    Some(&Value::String(ref s)) => Some(s.clone()),
+                    Some(Value::String(ref s)) => Some(s.clone()),
                     Some(&Value::Null) | None => None,
                     Some(s) => panic!("Out dir is not a string: {:?}", s),
                 };
