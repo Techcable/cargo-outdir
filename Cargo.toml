@@ -21,6 +21,8 @@ clap-cargo = { version = "0.8", features = ["cargo_metadata"] }
 # Parsing cargo metadata
 cargo_metadata = "0.14"
 semver = "1"
+# Parsing
+regex = "1"
 
 # indexmap (we want output to preserve order in our output maps)
 indexmap = { version = "1", features = ["serde"] }

@@ -5,7 +5,6 @@
 //! It is possible to have two versions of the same package.
 //! For example, `"itertools@0.10.3"` and `"itertools@0.15.0"`.
 //!
-//!
 //! This module contains a thin wrapper around `cargo pkgid` (for parsing user input).
 //!
 //! It also contains an [`AnalysedMetadata`], which is a wrapper around `cargo metadata`
@@ -19,20 +18,22 @@ use std::ops::{Deref, Index};
 use std::path::PathBuf;
 use std::process::Command;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use anyhow::Context;
+use cargo_metadata::{Metadata, Package, PackageId, Source};
+use regex::Regex;
 use serde::Serialize;
-
-use cargo_metadata::{Metadata, Package, PackageId, Source, Version};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PackageConflictKind {
     /// Multiple packages with the same name
     Names,
-    /// Multiple packages with the smae version
+    /// Multiple packages with the same version
     Version,
 }
 
+#[derive(Debug)]
 pub struct AnalysedPackage {
     metadata: Package,
     conflicts: Cell<Option<PackageConflictKind>>,
@@ -210,7 +211,7 @@ pub fn cargo_path() -> PathBuf {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PackageSpec {
     pub name: Option<String>,
-    version: Option<Version>,
+    version: Option<semver::Version>,
     source: Option<String>,
 }
 impl Serialize for PackageSpec {
@@ -253,49 +254,73 @@ impl Display for PackageSpec {
         Ok(())
     }
 }
+static PACKAGE_SPEC_SUFFIX_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?x)
+        ^
+        # valid package names restricted by cargo to the following: [\w_-]
+        # See here: https://doc.rust-lang.org/cargo/reference/manifest.html#the-name-field
+        #
+        # NOTE: Name is mandatory for the parsing we do.
+        (?<name>[\w_-]+)
+        # version seperated by `@` or `:`
+        #
+        # Match any alphanumeric chars and dots,
+        # then parse into semver::Version later.
+        (?:[@:]
+            (?<version>[\w\.]+)
+        )?
+        $
+    "#,
+    )
+    .unwrap()
+});
+/// Parses a [`PackageSpec`] from the oficial syntax described here:
+/// <https://doc.rust-lang.org/cargo/reference/pkgid-spec.html>.
+///
+/// The syntax is also described by `cargo help pkgid`
+///
+/// ## Unsupported syntax
+/// Not all syntax is supported.
+/// In particular, all package specs must have a name.
 impl FromStr for PackageSpec {
     type Err = MalformedPackageSpec;
     fn from_str(s: &str) -> Result<PackageSpec, MalformedPackageSpec> {
-        let mut remaining = s;
-        let url = if let Some(url_sep) = remaining.find('#') {
-            remaining = &remaining[url_sep + 1..];
-            // We make no attempt at URL validation
-            Some(&s[..url_sep])
-        } else {
-            None
+        // Find the last `#` if present - everything before that is a URL
+        //
+        // Finding the last one handles the case where the URl itself contains `#`.
+        // It is not possible for name or semver::Version to contain "#"
+        let (url, s) = match s.rsplit_once('#') {
+            Some((url, remaining)) => (Some(url.into()), remaining),
+            None => (None, s),
         };
-        let (name, version) = if let Some(version_sep) = remaining.find(':') {
-            (
-                Some(&remaining[..version_sep]),
-                Some(remaining[version_sep + 1..].parse::<semver::Version>()?),
-            )
-        } else {
-            // Both of the following are valid pkgids:
-            // url#version
-            // url#name
-            //
-            // we know how to parse versions, so try that first
-            if let Ok(ver) = remaining.parse::<Version>() {
-                (None, Some(ver))
-            } else {
-                (Some(remaining), None) // url#name
-            }
-        };
-        if url.is_none() && name.is_none() {
-            return Err(MalformedPackageSpec::MissingName);
-        }
+        let res = PACKAGE_SPEC_SUFFIX_PATTERN
+            .captures(s)
+            .ok_or_else(|| MalformedPackageSpec::MatchSuffixFailure { suffix: s.into() })?;
+        let name = res
+            .name("name")
+            .as_ref()
+            .map(regex::Match::as_str)
+            .map(String::from);
+        let version = res
+            .name("version")
+            .as_ref()
+            .map(regex::Match::as_str)
+            .map(semver::Version::from_str)
+            .transpose()?;
+
         Ok(PackageSpec {
-            source: url.map(String::from),
+            source: url,
             version,
-            name: name.map(String::from),
+            name,
         })
     }
 }
 #[non_exhaustive]
 #[derive(thiserror::Error, Debug)]
 pub enum MalformedPackageSpec {
-    #[error("Missing name")]
-    MissingName,
+    #[error("Unable to parse PackageSpec (doesn't match suffix pattern): {suffix:?}")]
+    MatchSuffixFailure { suffix: String },
     #[error("Invalid version in pkgid spec")]
     InvalidVersion {
         #[from]
@@ -339,4 +364,92 @@ pub fn resolve_pkg_spec(spec: Option<&str>) -> anyhow::Result<PackageSpec> {
 pub struct PackageResolveError {
     spec: Option<String>,
     pub message: String,
+}
+
+#[cfg(test)]
+mod test {
+    use super::PackageSpec;
+
+    macro_rules! assert_parse_spec {
+        ($src:expr => {
+            $(name: $expected_name:expr,)?
+            $(version: $expected_version:expr,)?
+            $(source: $expected_source:expr,)?
+        }) => ({
+            let src = $src;
+            #[allow(clippy::needless_update)]
+            let expected = PackageSpec {
+                $(name: Some($expected_name.into()),)*
+                $(version: {
+                    let version = $expected_version;
+                    Some(version.parse::<semver::Version>()
+                        .unwrap_or_else(|e| panic!("Failed to parse version: {e} ({version:?})")))
+                },)*
+                $(source: Some($expected_source.into()),)*
+                ..(PackageSpec {
+                    name: None,
+                    version: None,
+                    source: None,
+                })
+            };
+            assert_eq!(
+                src.parse::<PackageSpec>()
+                    .unwrap_or_else(|e| panic!("Failed to parse spec: {e} ({src:?})")),
+                expected,
+            );
+        })
+    }
+
+    /// Test parsing the output of `cargo pkgid`,
+    /// using the examples from `cargo help pkgid` (as of 2024-08-28)
+    #[test]
+    fn parse_pkgid_help_examples() {
+        // format: name
+        assert_parse_spec!(
+            "bitflags" => {
+                name: "bitflags",
+            }
+        );
+        // format: name@version
+        assert_parse_spec!(
+            "bitflags@1.0.4" => {
+                name: "bitflags",
+                version: "1.0.4",
+            }
+        );
+        // TODO: Support plain url, without name or version?
+        if false {
+            // format: url
+            assert_parse_spec!(
+                "https://github.com/rust-lang/cargo" => {
+                    source: "https://github.com/rust-lang/cargo",
+                }
+            );
+        }
+        // TODO: Support url#version without name?
+        if false {
+            // format: url#version
+            assert_parse_spec!(
+                "https://github.com/rust-lang/cargo#0.33.0" => {
+                    version: "0.33.0",
+                    source: "https://github.com/rust-lang/cargo",
+                }
+            );
+        }
+        // format: url#name
+        assert_parse_spec!(
+            "https://github.com/rust-lang/crates.io-index#bitflags" => {
+                name: "bitflags",
+                source: "https://github.com/rust-lang/crates.io-index",
+            }
+        );
+        // format: url#name@version
+        assert_parse_spec!(
+            "https://github.com/rust-lang/cargo#crates-io@0.21.0" => {
+                name: "crates-io",
+                version: "0.21.0",
+                source: "https://github.com/rust-lang/cargo",
+            }
+        );
+    }
 }
