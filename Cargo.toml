@@ -10,7 +10,9 @@ categories = ["development-tools::cargo-plugins", "development-tools::build-util
 edition = "2021"
 readme = "README.md"
 # 1.70: std::io::IsTerminal
-rust-version = "1.70"
+# 1.70: std::cell::OnceCell
+# 1.80: std::sync::LazyLock
+rust-version = "1.80"
 
 [dependencies]
 clap = { version = "3.0", features = ["derive"] }
@@ -25,8 +27,6 @@ indexmap = { version = "1", features = ["serde"] }
 # Errors
 anyhow = "1"
 thiserror = "1"
-# Used to lazy-load some metadata
-once_cell = "1"
 
 # Serialize
 serde = { version = "1", features = ["derive"] }

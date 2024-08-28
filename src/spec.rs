@@ -11,7 +11,7 @@
 //! It also contains an [`AnalysedMetadata`], which is a wrapper around `cargo metadata`
 //! which can be used to output the "minimal" package spec.
 
-use std::cell::Cell;
+use std::cell::{Cell, OnceCell};
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::fmt::{self, Display, Formatter};
@@ -21,7 +21,6 @@ use std::process::Command;
 use std::str::FromStr;
 
 use anyhow::Context;
-use once_cell::unsync::OnceCell;
 use serde::Serialize;
 
 use cargo_metadata::{Metadata, Package, PackageId, Source, Version};
