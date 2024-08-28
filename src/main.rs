@@ -2,7 +2,7 @@
 #![warn(clippy::doc_markdown)]
 
 use std::ffi::OsStr;
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::process::{Command, Stdio};
 use std::{env, iter};
 
@@ -172,7 +172,7 @@ fn main() -> anyhow::Result<()> {
     let metadata = AnalysedMetadata::analyse(metadata);
     let target = cli.target();
     let mut check = Command::new(cargo_path());
-    let quiet = !cli.verbose && (cli.quiet || atty::isnt(atty::Stream::Stderr));
+    let quiet = !cli.verbose && (cli.quiet || std::io::stderr().is_terminal());
     let include_missing_outdirs = match (cli.include_missing_outdirs, cli.skip_missing_outdirs) {
         (true, true) => anyhow::bail!(
             "Cannot specify to both include and skip packages that are missing outdirs"

@@ -45,7 +45,6 @@ name = "cargo-outdir"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "atty",
  "cargo_metadata",
  "clap",
  "clap-cargo",
