@@ -75,8 +75,7 @@ struct Cli {
     /// Include packages that are missing outdirs (ones that don't have build scripts).
     ///
     /// This is the default when using `--current` or an explicit list of packages.
-    ///
-    #[clap(long = "include-missing", conflicts_with = "skip-missing-outdirs")]
+    #[clap(long = "include-missing", conflicts_with = "skip_missing_outdirs")]
     include_missing_outdirs: bool,
     /// Process *all* the possible packages, including transitive dependencies.
     ///
