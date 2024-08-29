@@ -85,10 +85,12 @@ struct Cli {
     /// Process all the packages in the current workspace.
     #[clap(long, group = "target-packages")]
     workspace: bool,
-    /// Process the package in the current directory.
+    /// Process only the package in the current directory.
     ///
-    /// This is the default if nothing else is specified.
+    /// This will trigger an error if the current
+    /// directory is a virtual manifest.
     #[clap(long, short, group = "target-packages")]
+    // TODO: Deprecate the `short` form
     current: bool,
     /// The target packages to analyse.
     #[clap(group = "target-packages")]
@@ -105,17 +107,34 @@ impl Cli {
         } else if !self.explicit_packages.is_empty() {
             TargetPackages::Explicit(&self.explicit_packages)
         } else {
-            TargetPackages::Current // Default to current
+            TargetPackages::Default
         }
     }
 }
 
+/// The packages to select.
 #[derive(Debug)]
 enum TargetPackages<'a> {
     All,
     Workspace,
     Current,
     Explicit(&'a [String]),
+    /// Select the default package,
+    /// consistent with behavior of `cargo check` and `cargo build`.
+    ///
+    /// This based on the selected manifest file, which is inferred
+    /// from the working directory if `--manifest-path` is not set.
+    ///
+    /// If the manifest refers to an regular package,
+    /// then that package will be selected.
+    /// If the manifest is the root of a workspace,
+    /// then the workspace's default membmers are set (configured by `workspace.default-members`).
+    /// If the default members are not explcitly configured,
+    /// it will default to all workspace members (just like `--workspace`).
+    ///
+    /// This is consitsent with the package selection
+    /// behavior of `cargo build` and `cargo check`.
+    Default,
 }
 impl<'a> TargetPackages<'a> {
     fn collect_packages(
@@ -124,7 +143,11 @@ impl<'a> TargetPackages<'a> {
     ) -> Result<IndexSet<PackageId>, anyhow::Error> {
         match *self {
             TargetPackages::All => Ok(meta.packages.iter().map(|pkg| &pkg.id).cloned().collect()),
-            TargetPackages::Workspace => Ok(meta.workspace_members.iter().cloned().collect()),
+            TargetPackages::Workspace => Ok({
+                // NOTE: meta.workspace_default_members requires cargo 1.71 or newer
+                meta.workspace_members.iter().cloned().collect()
+            }),
+            TargetPackages::Default => Ok(meta.workspace_default_members.iter().cloned().collect()),
             TargetPackages::Current | TargetPackages::Explicit(_) => {
                 let specs = self.collect_explicit_package_specs(meta)?;
                 Ok(specs
@@ -186,8 +209,8 @@ fn main() -> anyhow::Result<()> {
         }
     };
     check.arg("check").arg("--message-format=json");
-    if matches!(target, TargetPackages::Current) {
-        // Implicitly restrict to the working directory
+    if matches!(target, TargetPackages::Current | TargetPackages::Default) {
+        // Implicitly restrict to the current package/workspace default members
     } else {
         // Just run the whole workspace then filter ;)
         check.arg("--workspace");
