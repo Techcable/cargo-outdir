@@ -4,10 +4,12 @@
 use std::ffi::OsStr;
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::{Command, Stdio};
+use std::sync::LazyLock;
 use std::{env, iter};
 
-use anyhow::Context;
+use anyhow::{anyhow, ensure, Context};
 use indexmap::{IndexMap, IndexSet};
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::{Deserializer, Value};
 
@@ -16,6 +18,11 @@ use clap::Parser;
 
 mod spec;
 use spec::{cargo_path, resolve_pkg_spec, AnalysedMetadata, PackageSpec};
+
+/// Required cargo version (minor version).
+///
+/// Cargo 1.71: Needed for `workspace_default_members` in `cargo metadata`.
+const REQUIRED_CARGO_VERSION: semver::Version = semver::Version::new(1, 71, 0);
 
 /// Detects the `$OUT_DIR` for build script outputs.
 ///
@@ -188,6 +195,12 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse_from(args);
     let mut metadata_command = cli.manifest.metadata();
     cli.features.forward_metadata(&mut metadata_command);
+    // Check cargo version
+    let cargo_version = detect_cargo_version().context("Failed to detect cargo version")?;
+    ensure!(
+        cargo_version >= REQUIRED_CARGO_VERSION,
+        "Need cargo version {REQUIRED_CARGO_VERSION}, but got {cargo_version}"
+    );
     let metadata = metadata_command
         .exec()
         .context("Failed to execute `cargo metadata`")?;
@@ -342,4 +355,42 @@ fn main() -> anyhow::Result<()> {
 enum Problem {
     MissingOutDir,
     NothingToPrint,
+}
+
+fn detect_cargo_version() -> anyhow::Result<semver::Version> {
+    let mut child = Command::new(cargo_path())
+        .arg("version")
+        .stdout(Stdio::piped())
+        .spawn()
+        .context("Failed to spawn `cargo version` command")?;
+    let stdout = {
+        let mut stdout = child.stdout.take().unwrap();
+        let status = child
+            .wait()
+            .context("Failed to run `cargo version` command")?;
+        ensure!(
+            status.success(),
+            "Encountered error running `cargo version` (code: {code})",
+            code = status
+                .code()
+                .map_or_else(|| "?".to_string(), |val| val.to_string()),
+        );
+        let mut buffer = String::new();
+        stdout
+            .read_to_string(&mut buffer)
+            .context("Failed to read stdout from `cargo version` command")?;
+        // strip trailing whitespace
+        buffer.truncate(buffer.trim_end().len());
+        buffer
+    };
+    static CARGO_VERSION_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+        // NOTE: Doesn't parse channel or date
+        Regex::new(r#"^cargo (?<semver>(\d+).(\d+).(\d+))"#).unwrap()
+    });
+    let captures = CARGO_VERSION_PATTERN
+        .captures(&stdout)
+        .ok_or_else(|| anyhow!("Failed to parse cargo version: {stdout:?}"))?;
+    captures["semver"]
+        .parse::<semver::Version>()
+        .context("Failed to parse cargo version as semantic version")
 }
