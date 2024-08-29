@@ -207,7 +207,7 @@ fn main() -> anyhow::Result<()> {
     let metadata = AnalysedMetadata::analyse(metadata);
     let target = cli.target();
     let mut check = Command::new(cargo_path());
-    let quiet = !cli.verbose && (cli.quiet || std::io::stderr().is_terminal());
+    let quiet = !cli.verbose && (cli.quiet || !std::io::stderr().is_terminal());
     let include_missing_outdirs = match (cli.include_missing_outdirs, cli.skip_missing_outdirs) {
         (true, true) => anyhow::bail!(
             "Cannot specify to both include and skip packages that are missing outdirs"
@@ -221,7 +221,16 @@ fn main() -> anyhow::Result<()> {
             target.is_explicit() || cli.json
         }
     };
-    check.arg("check").arg("--message-format=json");
+    // Use `--message-format=json-render-diagnostics`,
+    // which gives json output to stdout and regular
+    // error/warning messages to stderr
+    //
+    // Our current required cargo version is 1.71.0,
+    // which supports this flag.
+    assert!(REQUIRED_CARGO_VERSION >= semver::Version::new(1, 71, 0));
+    check
+        .arg("check")
+        .arg("--message-format=json-render-diagnostics");
     if matches!(target, TargetPackages::Current | TargetPackages::Default) {
         // Implicitly restrict to the current package/workspace default members
     } else {
