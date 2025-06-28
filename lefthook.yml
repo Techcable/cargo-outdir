@@ -8,4 +8,7 @@ pre-commit:
       tags: formatter
       glob: "*.rs"
       run: cargo fmt --check -- {staged_files}
+    typos:
+      tags: typos
+      run: typos -- {staged_files}
 

@@ -31,11 +31,11 @@ const REQUIRED_CARGO_VERSION: semver::Version = semver::Version::new(1, 71, 0);
 ///
 /// <https://doc.rust-lang.org/cargo/reference/build-scripts.html#outputs-of-the-build-script>
 ///
-/// By default, information is output in an ad hoc format, seperated by newlines:
+/// By default, information is output in an ad hoc format, separated by newlines:
 /// `<package_name> <package.OUT_DIR>`
 ///
 /// However, you can specify `--no-names` to disable the package names,
-/// and you can add `--json` to switch to outputing a structured json object.
+/// and you can add `--json` to switch to outputting a structured json object.
 #[derive(Debug, Parser)]
 #[clap(about, version, author)]
 struct Cli {
@@ -45,15 +45,15 @@ struct Cli {
     features: clap_cargo::Features,
     /// Be more verbose, outputting more warnings
     ///
-    /// By default, messages are suppressed unless a build error occurrs.
+    /// By default, messages are suppressed unless a build error occurs.
     #[clap(long, short)]
     verbose: bool,
-    /// Supress output from cargo check
+    /// Suppress output from cargo check
     ///
     /// This is the default if stdout is not a terminal.
     #[clap(long, short)]
     quiet: bool,
-    /// Use a compact json format to ouptut package directory names,
+    /// Use a compact json format to output package directory names,
     /// instead of the ad-hoc line by line format.
     ///
     /// The output is in the format `{"first-crate": "$OUT_DIR", "second-crate": "$OUT_DIR"}`.
@@ -61,10 +61,10 @@ struct Cli {
     json: bool,
     /// Exclude package names from the ad-hoc output.
     ///
-    /// Each package would correspond to `<OUTPUT_DIR>` seperated by a newline package
+    /// Each package would correspond to `<OUTPUT_DIR>` separated by a newline package
     ///
     /// This is not permitted when using implicit scanning for packages (`--workspace` or `--all`)
-    /// as the order of the output would be ambigous.
+    /// as the order of the output would be ambiguous.
     #[clap(
         long,
         conflicts_with = "json",
@@ -136,7 +136,7 @@ enum TargetPackages<'a> {
     /// then that package will be selected.
     /// If the manifest is the root of a workspace,
     /// then the workspace's default membmers are set (configured by `workspace.default-members`).
-    /// If the default members are not explcitly configured,
+    /// If the default members are not explicitly configured,
     /// it will default to all workspace members (just like `--workspace`).
     ///
     /// This is consitsent with the package selection
@@ -339,7 +339,7 @@ fn main() -> anyhow::Result<()> {
         }
     } else if let Some(err) = stderr {
         // Print the output from cargo check (that we have previously been hoarding)
-        // TOOD: Prettier output (convert from json => semi-human)
+        // TODO: Prettier output (convert from json => semi-human)
         io::stderr()
             .write_all(err.as_bytes())
             .expect("Failed to dump cargo error messages :(");

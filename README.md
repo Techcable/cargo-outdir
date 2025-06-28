@@ -14,7 +14,7 @@ It is effectively a workaround to [rust-lang/cargo#7546](https://github.com/rust
 
 ## Examples
 #### `$ cargo out`
-Assuming your current crate is named `current-crate`, this wil output something like:
+Assuming your current crate is named `current-crate`, this will output something like:
 ````
 current-crate /Users/techcable/git/current-crate/target/debug/build/current-crate-82e5bb1cb82b68a7/out
 ````
@@ -29,7 +29,7 @@ syn /Users/techcable/git/current-crate/target/debug/build/syn-2bbc24a01fc81726/o
 indexmap /Users/techcable/git/current-crate/target/debug/build/indexmap-376e9f234cf30ee8/out
 ````
 
-These are output in the order specified on the command line, seperated by newlines.
+These are output in the order specified on the command line, separated by newlines.
 
 If the package doesn't have an out dir, the output will be `"<MISSING OUT_DIR>"` exactly and the exit code will be `2`.
 
@@ -56,11 +56,9 @@ If multiple packages have the same name, then version will be added. More precic
 This runs `cargo check --message-format=json` and extracts only the nessicarry information.
 
 
-Historically this has been an issue for IDEs, both [intellij-rust](https://github.com/intellij-rust/intellij-rust/pull/4542) and [rust-analsyer](https://github.com/rust-analyzer/rust-analyzer/pull/1967) have struggled to support this.
+Historically this has been an issue for IDEs, both [intellij-rust](https://github.com/intellij-rust/intellij-rust/pull/4542) and [rust-analyser](https://github.com/rust-analyzer/rust-analyzer/pull/1967) have struggled to support this.
 
 
 Do to recent compiler changes, this will always output the proper [`$OUT_DIR` variables](https://doc.rust-lang.org/cargo/reference/build-scripts.html#outputs-of-the-build-script) for all packages that have one.
 
-
-However recent changes to `cargo check` have made this possible. It sill  :)
 

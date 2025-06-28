@@ -167,7 +167,7 @@ impl AnalysedMetadata {
             };
             match pkg.conflicts.get() {
                 None => {
-                    // The name is sufficent
+                    // The name is sufficient
                 }
                 Some(PackageConflictKind::Names) => {
                     // Add in version to disambiguate
@@ -180,7 +180,7 @@ impl AnalysedMetadata {
                         res.source = Some(String::from(PackageSpec::source_as_url(src)));
                         assert!(res.is_fully_qualified());
                     } else {
-                        // If we don't have a 'source', just hope we're not ambigous..
+                        // If we don't have a 'source', just hope we're not ambiguous..
                     }
                 }
             };
@@ -199,7 +199,7 @@ pub fn cargo_path() -> PathBuf {
 ///
 /// This is *NOT* a [`cargo_metadata::PackageId`], because it is valid input (or output) for `cargo pkgid`
 ///
-/// When used with [`AnalysedMetadata`], it is also normalized to the simplest unambigous form.
+/// When used with [`AnalysedMetadata`], it is also normalized to the simplest unambiguous form.
 ///
 /// That is, if there's only one version of `syn`, the spec will be "syn".
 ///
@@ -263,7 +263,7 @@ static PACKAGE_SPEC_SUFFIX_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
         #
         # NOTE: Name is mandatory for the parsing we do.
         (?<name>[\w_-]+)
-        # version seperated by `@` or `:`
+        # version separated by `@` or `:`
         #
         # Match any alphanumeric chars and dots,
         # then parse into semver::Version later.
@@ -275,7 +275,7 @@ static PACKAGE_SPEC_SUFFIX_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     )
     .unwrap()
 });
-/// Parses a [`PackageSpec`] from the oficial syntax described here:
+/// Parses a [`PackageSpec`] from the official syntax described here:
 /// <https://doc.rust-lang.org/cargo/reference/pkgid-spec.html>.
 ///
 /// The syntax is also described by `cargo help pkgid`
