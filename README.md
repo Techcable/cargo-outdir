@@ -57,3 +57,7 @@ Do to recent cargo changes, this will always output the proper [`$OUT_DIR` varia
 
 If multiple packages have the same name, then a version will be added. More precisely, the json keys will be the minimal `cargo pkgid` needed to disambiguate them. This is actually [somewhat difficult to do](./src/spec.rs).
 
+## License
+Licensed under either the Apache 2.0 License or MIT License at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
