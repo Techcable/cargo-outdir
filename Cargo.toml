@@ -17,9 +17,9 @@ rust-version = "1.80"
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 # Utilities
-clap-cargo = { version = "0.14", features = ["cargo_metadata"] }
-# Parsing cargo metadata
-cargo_metadata = "0.18"
+clap-cargo = { version = "0.15", features = ["cargo_metadata"] }
+# Parsing cargo metadata - must match clap-cargo
+cargo_metadata = "0.19"
 semver = "1"
 # Parsing
 regex = "1"
@@ -28,7 +28,7 @@ regex = "1"
 indexmap = { version = "2", features = ["serde"] }
 # Errors
 anyhow = "1"
-thiserror = "1"
+thiserror = "2"
 
 # Serialize
 serde = { version = "1", features = ["derive"] }
