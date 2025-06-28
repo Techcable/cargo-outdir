@@ -6,9 +6,7 @@ This is extremely useful to inspect the output of automatically generated code, 
 
 This can be seen as an extension to `cargo metadata`, except it requires that `cargo check` succeeds.
 
-If `cargo check` succeeds, then this command succeeds too (and give the same output).
-
-Due to recent changes in `cargo check`, this *will not invalidate cached outputs*, so the build scripts wont be re-run unless they need to :)
+Due to recent changes in `cargo check`, this *will not invalidate cached outputs*, so the build scripts won't be re-run unless they need to :)
 
 It is effectively a workaround to [rust-lang/cargo#7546](https://github.com/rust-lang/cargo/issues/7546)
 
@@ -46,19 +44,16 @@ You might want to consider json output as well.
 }
 `````
 
-If packages don't have an `$OUT_DIR` (because they don't have a build script), then the value for the specified key will be null. 
+If packages don't have an `$OUT_DIR` (because they don't have a build script), then the value for the specified key will be null.
 
-This can be used along with [jq](https://stedolan.github.io/jq/) for easy processing in scripts :)
-
-If multiple packages have the same name, then version will be added. More precicely, the json keys will be the minimal `cargo pkgid` needed to disambiguate them. This is actually [somewhat difficult to do](./src/spec.rs) :)
+This can be used along with [jq](https://stedolan.github.io/jq/) for easy processing in scripts.
 
 ## How it works
-This runs `cargo check --message-format=json` and extracts only the nessicarry information.
-
+This runs `cargo check --message-format=json` to extract the necessary information.
 
 Historically this has been an issue for IDEs, both [intellij-rust](https://github.com/intellij-rust/intellij-rust/pull/4542) and [rust-analyser](https://github.com/rust-analyzer/rust-analyzer/pull/1967) have struggled to support this.
 
+Do to recent cargo changes, this will always output the proper [`$OUT_DIR` variables](https://doc.rust-lang.org/cargo/reference/build-scripts.html#outputs-of-the-build-script) for all packages that have one.
 
-Do to recent compiler changes, this will always output the proper [`$OUT_DIR` variables](https://doc.rust-lang.org/cargo/reference/build-scripts.html#outputs-of-the-build-script) for all packages that have one.
-
+If multiple packages have the same name, then a version will be added. More precisely, the json keys will be the minimal `cargo pkgid` needed to disambiguate them. This is actually [somewhat difficult to do](./src/spec.rs).
 
