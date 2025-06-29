@@ -1,6 +1,6 @@
 [package]
 name = "cargo-outdir"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["Techcable <Techcable@techcable.net>"]
 license = "MIT OR Apache-2.0"
 description = "A cargo subcommand to get the $OUT_DIR environment variable from build scripts."

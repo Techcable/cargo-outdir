@@ -346,8 +346,8 @@ pub fn resolve_pkg_spec(spec: Option<&str>) -> anyhow::Result<PackageSpec> {
     let output = cmd.output().context("")?;
     if output.status.success() {
         let out = String::from_utf8(output.stdout).expect("cargo pkgid did not return valid UTF8");
+        let out = out.trim_end();
         Ok(out
-            .trim_end()
             .parse::<PackageSpec>()
             .unwrap_or_else(|e| panic!("Unable to parse pkgid {:?}: {}", out, e)))
     } else {
