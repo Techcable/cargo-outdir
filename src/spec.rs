@@ -265,10 +265,10 @@ static PACKAGE_SPEC_SUFFIX_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
         (?<name>[\w_-]+)
         # version separated by `@` or `:`
         #
-        # Match any alphanumeric chars and dots,
+        # Match any number of non-whitespace characters,
         # then parse into semver::Version later.
         (?:[@:]
-            (?<version>[\w\.]+)
+            (?<version>\S+)
         )?
         $
     "#,
