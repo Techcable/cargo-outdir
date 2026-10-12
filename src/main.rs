@@ -299,8 +299,18 @@ fn main() -> anyhow::Result<()> {
         .transpose()?;
     let check_status = child.wait().context("`cargo check` exited abnormally")?;
     let mut problem = None;
-
-    if check_status.success() {
+    if let Some(err) = stderr {
+        // Print the output from cargo check (that we have previously been hoarding)
+        // TODO: Prettier output (convert from json => semi-human)
+        io::stderr()
+            .write_all(err.as_bytes())
+            .expect("Failed to dump cargo error messages :(");
+    }
+    if !check_status.success() {
+        eprintln!("WARNING: `cargo check` failed, output may be incorrect or incomplete")
+    }
+    // still attempt to parse the output
+    {
         let out_dirs = desired_packages
             .iter()
             .map(|id| {
@@ -337,12 +347,6 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
-    } else if let Some(err) = stderr {
-        // Print the output from cargo check (that we have previously been hoarding)
-        // TODO: Prettier output (convert from json => semi-human)
-        io::stderr()
-            .write_all(err.as_bytes())
-            .expect("Failed to dump cargo error messages :(");
     }
     match problem {
         Some(Problem::MissingOutDir) => {
