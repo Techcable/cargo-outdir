@@ -25,6 +25,7 @@ cargo_metadata = "0.23"
 semver = "1"
 # Parsing
 regex = "1"
+url = "2"
 
 # indexmap (we want output to preserve order in our output maps)
 indexmap = { version = "2", features = ["serde"] }

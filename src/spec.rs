@@ -18,12 +18,11 @@ use std::ops::{Deref, Index};
 use std::path::PathBuf;
 use std::process::Command;
 use std::str::FromStr;
-use std::sync::LazyLock;
 
 use anyhow::Context;
 use cargo_metadata::{Metadata, Package, PackageId, Source};
-use regex::Regex;
 use serde::Serialize;
+use url::Url;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PackageConflictKind {
@@ -58,7 +57,7 @@ impl AnalysedPackage {
             }
         }
         if let (Some(expected_src), Some(src)) = (&spec.source, &self.source) {
-            if *expected_src != PackageSpec::source_as_url(src) {
+            if *expected_src != *src {
                 return false;
             }
         }
@@ -162,6 +161,7 @@ impl AnalysedMetadata {
         pkg.minimal_spec.get_or_init(|| {
             let mut res = PackageSpec {
                 name: Some(pkg.name.to_string()),
+                name_is_explicit: true,
                 version: None,
                 source: None,
             };
@@ -177,7 +177,10 @@ impl AnalysedMetadata {
                     // Add in version and source to disambiguate
                     res.version = Some(pkg.version.clone());
                     if let Some(ref src) = pkg.source {
-                        res.source = Some(String::from(PackageSpec::source_as_url(src)));
+                        res.source =
+                            Some(src.repr.parse::<PackageSource>().expect(
+                                "Failed to convert cargo_metadata::Source -> PackageSource",
+                            ));
                         assert!(res.is_fully_qualified());
                     } else {
                         // If we don't have a 'source', just hope we're not ambiguous..
@@ -193,6 +196,48 @@ pub fn cargo_path() -> PathBuf {
     std::env::var_os("CARGO")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("cargo"))
+}
+
+macro_rules! spec_kinds {
+    (pub enum PackageSpecKind {
+        $($variant:ident => $spec:literal),+ $(,)?
+    }) => {
+        #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+        pub enum PackageSpecKind {
+            $($variant,)*
+        }
+        impl PackageSpecKind {
+            pub fn as_str(&self) -> &'static str {
+                match self {
+                    $(Self::$variant => $spec,)*
+                }
+            }
+        }
+        impl FromStr for PackageSpecKind {
+            type Err = UnknownPackageSpecKind;
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                match s {
+                    $($spec => Ok(Self::$variant),)*
+                    _ => Err(UnknownPackageSpecKind {
+                        kind: s.into(),
+                    })
+                }
+            }
+        }
+    };
+}
+spec_kinds! {
+    pub enum PackageSpecKind {
+        Registry => "registry",
+        Git => "git",
+        Path => "path",
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+#[error("Unknown package spec kind {kind:?}")]
+pub struct UnknownPackageSpecKind {
+    kind: String,
 }
 
 /// The specification of a package as given by `cargo pkgid`.
@@ -211,8 +256,9 @@ pub fn cargo_path() -> PathBuf {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PackageSpec {
     pub name: Option<String>,
+    name_is_explicit: bool,
     version: Option<semver::Version>,
-    source: Option<String>,
+    source: Option<PackageSource>,
 }
 impl Serialize for PackageSpec {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -223,14 +269,6 @@ impl Serialize for PackageSpec {
     }
 }
 impl PackageSpec {
-    pub fn source_as_url(source: &Source) -> &str {
-        let source = &source.repr;
-        if let Some(idx) = source.find('+') {
-            &source[idx + 1..]
-        } else {
-            panic!("Unexpected source: {:?}", source)
-        }
-    }
     #[inline]
     fn is_fully_qualified(&self) -> bool {
         self.name.is_some() && self.version.is_some() && self.source.is_some()
@@ -239,42 +277,28 @@ impl PackageSpec {
 impl Display for PackageSpec {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         if let Some(ref source) = self.source {
-            f.write_str(source)?;
-            f.write_char('#')?;
+            write!(f, "{source}")?;
         }
-        if let Some(ref name) = self.name {
-            f.write_str(name)?;
-        }
-        if self.name.is_some() && self.version.is_some() {
-            f.write_char(':')?;
-        }
-        if let Some(ref version) = self.version {
-            write!(f, "{}", version)?;
+        let has_name = self.name.is_some() && self.name_is_explicit;
+        let has_version = self.version.is_some();
+        if has_name || has_version {
+            if self.source.is_some() {
+                f.write_char('#')?;
+            }
+            if has_name {
+                f.write_str(self.name.as_ref().unwrap())?;
+            }
+            if has_name && has_version {
+                f.write_char(':')?;
+            }
+            if has_version {
+                write!(f, "{}", self.version.as_ref().unwrap())?;
+            }
         }
         Ok(())
     }
 }
-static PACKAGE_SPEC_SUFFIX_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"(?x)
-        ^
-        # valid package names restricted by cargo to the following: [\w_-]
-        # See here: https://doc.rust-lang.org/cargo/reference/manifest.html#the-name-field
-        #
-        # NOTE: Name is mandatory for the parsing we do.
-        (?<name>[\w_-]+)
-        # version separated by `@` or `:`
-        #
-        # Match any number of non-whitespace characters,
-        # then parse into semver::Version later.
-        (?:[@:]
-            (?<version>\S+)
-        )?
-        $
-    "#,
-    )
-    .unwrap()
-});
+
 /// Parses a [`PackageSpec`] from the official syntax described here:
 /// <https://doc.rust-lang.org/cargo/reference/pkgid-spec.html>.
 ///
@@ -290,32 +314,184 @@ impl FromStr for PackageSpec {
         //
         // Finding the last one handles the case where the URl itself contains `#`.
         // It is not possible for name or semver::Version to contain "#"
-        let (url, s) = match s.rsplit_once('#') {
-            Some((url, remaining)) => (Some(url.into()), remaining),
-            None => (None, s),
+        //
+        // Note that if `#` is not present, then ether
+        // - we only have a source
+        // - we only have a name+version
+        //
+        // we can tell this apart by checking if there is a `::/`
+        // A PackageSource should always have this and a PackageSpecSuffix never should
+        fn is_url(s: &str) -> bool {
+            s.contains("://")
+        }
+        let (source, suffix) = match s.rsplit_once('#') {
+            Some((url, remaining)) => (
+                Some(url.parse::<PackageSource>()?),
+                Some(remaining.parse::<parse::PackageSpecSuffix>()?),
+            ),
+            None => {
+                if is_url(s) {
+                    (Some(s.parse::<PackageSource>()?), None)
+                } else {
+                    (None, Some(s.parse::<parse::PackageSpecSuffix>()?))
+                }
+            }
         };
-        let res = PACKAGE_SPEC_SUFFIX_PATTERN
-            .captures(s)
-            .ok_or_else(|| MalformedPackageSpec::MatchSuffixFailure { suffix: s.into() })?;
-        let name = res
-            .name("name")
-            .as_ref()
-            .map(regex::Match::as_str)
-            .map(String::from);
-        let version = res
-            .name("version")
-            .as_ref()
-            .map(regex::Match::as_str)
-            .map(semver::Version::from_str)
-            .transpose()?;
-
+        let (name, name_is_explicit) = if let Some(ref suffix) = suffix
+            && let Some(ref name) = suffix.name
+        {
+            (Some(name.clone()), true)
+        } else if let Some(PackageSource { ref url, .. }) = source {
+            let path = url.path();
+            let inferred_name = url
+                .path()
+                .rsplit_once('/')
+                .ok_or_else(|| MalformedPackageSpec::UrlNameInference {
+                    url_path: path.into(),
+                })?
+                .1;
+            (Some(inferred_name.into()), false)
+        } else {
+            (None, false)
+        };
         Ok(PackageSpec {
-            source: url,
-            version,
+            source,
+            name_is_explicit,
             name,
+            version: suffix.as_ref().and_then(|ver| ver.version.clone()),
         })
     }
 }
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PackageSource {
+    pub kind: Option<PackageSpecKind>,
+    pub url: Url,
+}
+impl From<Source> for PackageSource {
+    fn from(value: Source) -> Self {
+        value
+            .repr
+            .parse::<Self>()
+            .expect("Failed to convert cargo_metadata::Source -> PackageSource")
+    }
+}
+impl Display for PackageSource {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if let Some(kind) = self.kind {
+            write!(f, "{}+", kind.as_str())?;
+        }
+        write!(f, "{}", self.url)
+    }
+}
+impl PartialEq<Source> for PackageSource {
+    fn eq(&self, other: &Source) -> bool {
+        self.to_string() == other.repr
+    }
+}
+
+/// Types used to help with parsing a [`PackageSpec`].
+mod parse {
+    use super::{MalformedPackageSpec, PackageSource};
+    use regex::Regex;
+    use std::str::FromStr;
+    use std::sync::LazyLock;
+    use url::Url;
+
+    static URL_KIND_PATTERN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"#(?<kind>\w+)\+(?<url>.*)#").unwrap());
+    impl FromStr for PackageSource {
+        type Err = MalformedPackageSpec;
+
+        fn from_str(full: &str) -> Result<Self, Self::Err> {
+            let parse_url = |url: &str| {
+                url.parse::<Url>()
+                    .map_err(|cause| MalformedPackageSpec::InvalidUrl {
+                        cause,
+                        url: url.into(),
+                    })
+            };
+            if let Some(capt) = URL_KIND_PATTERN.captures(full) {
+                let kind = &capt["kind"];
+                let url = &capt["url"];
+                Ok(PackageSource {
+                    kind: Some(kind.parse::<super::PackageSpecKind>().map_err(|cause| {
+                        MalformedPackageSpec::UnknownKind {
+                            url: full.into(),
+                            unknown: cause,
+                        }
+                    })?),
+                    url: parse_url(url)?,
+                })
+            } else {
+                Ok(PackageSource {
+                    kind: None,
+                    url: parse_url(full)?,
+                })
+            }
+        }
+    }
+    /// A package spec suffix containing both name + version.
+    static PACKAGE_SPEC_FULL_SUFFIX_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r#"(?x)
+            ^
+            # valid package names restricted by cargo to the following: [\w_-]
+            # See here: https://doc.rust-lang.org/cargo/reference/manifest.html#the-name-field
+            #
+            # Name is usually mandatory for the parsing we do,
+            # but it can be missing for local paths
+            (?<name>[\w_-]+)
+            # version separated by `@` or `:`
+            #
+            # Match any number of non-whitespace characters,
+            # then parse into semver::Version later.
+            (?:[@:]
+                (?<version>\S+)
+            )?
+            $
+        "#,
+        )
+        .unwrap()
+    });
+    pub struct PackageSpecSuffix {
+        pub name: Option<String>,
+        pub version: Option<semver::Version>,
+    }
+    impl FromStr for PackageSpecSuffix {
+        type Err = MalformedPackageSpec;
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            let bad_suffix = || MalformedPackageSpec::MatchSuffixFailure { suffix: s.into() };
+            let c = s.chars().next().ok_or_else(&bad_suffix)?;
+            if c.is_ascii_alphabetic() {
+                let res = PACKAGE_SPEC_FULL_SUFFIX_PATTERN
+                    .captures(s)
+                    .ok_or_else(&bad_suffix)?;
+                let name = res
+                    .name("name")
+                    .as_ref()
+                    .map(regex::Match::as_str)
+                    .map(String::from);
+                let version = res
+                    .name("version")
+                    .as_ref()
+                    .map(regex::Match::as_str)
+                    .map(semver::Version::from_str)
+                    .transpose()?;
+                Ok(PackageSpecSuffix { name, version })
+            } else if c.is_ascii_digit() {
+                // assume that we just have a version
+                let version = s.parse::<semver::Version>()?;
+                Ok(PackageSpecSuffix {
+                    name: None,
+                    version: Some(version),
+                })
+            } else {
+                Err(bad_suffix())
+            }
+        }
+    }
+}
+
 #[non_exhaustive]
 #[derive(thiserror::Error, Debug)]
 pub enum MalformedPackageSpec {
@@ -326,6 +502,20 @@ pub enum MalformedPackageSpec {
         #[from]
         source: semver::Error,
     },
+    #[error("Failed to parse URL {url:?}")]
+    InvalidUrl {
+        url: String,
+        #[source]
+        cause: url::ParseError,
+    },
+    #[error("Package starts with unknown `kind+` for URL {url:?}")]
+    UnknownKind {
+        url: String,
+        #[source]
+        unknown: UnknownPackageSpecKind,
+    },
+    #[error("Failed to determine package name from URL path {url_path:?}")]
+    UrlNameInference { url_path: String },
 }
 impl<'a> Index<&'a PackageId> for AnalysedMetadata {
     type Output = AnalysedPackage;
@@ -373,23 +563,29 @@ mod test {
     macro_rules! assert_parse_spec {
         ($src:expr => {
             $(name: $expected_name:expr,)?
+            $(name_is_explicit: $name_is_explicit:literal,)?
             $(version: $expected_version:expr,)?
             $(source: $expected_source:expr,)?
-        }) => ({
+        }) => (#[allow(clippy::needless_update, unused_mut, unused_assignments)] {
             let src = $src;
-            #[allow(clippy::needless_update)]
+            let mut name = None;
+            $(name = Some($expected_name.into());)*
+            let mut name_is_explicit = name.is_some();
+            $(name_is_explicit = $name_is_explicit;)*
             let expected = PackageSpec {
-                $(name: Some($expected_name.into()),)*
+                name_is_explicit,
+                name,
                 $(version: {
                     let version = $expected_version;
                     Some(version.parse::<semver::Version>()
                         .unwrap_or_else(|e| panic!("Failed to parse version: {e} ({version:?})")))
                 },)*
-                $(source: Some($expected_source.into()),)*
+                $(source: Some($expected_source.parse().expect("Invalid source")),)*
                 ..(PackageSpec {
                     name: None,
                     version: None,
                     source: None,
+                    name_is_explicit: false,
                 })
             };
             assert_eq!(
@@ -451,5 +647,33 @@ mod test {
                 source: "https://github.com/rust-lang/cargo",
             }
         );
+    }
+
+    #[test]
+    fn parse_local_pkgid() {
+        //examples from docs
+        assert_parse_spec!(
+            "file:///path/to/my/project/foo" => {
+                name: "foo",
+                name_is_explicit: false,
+                source: "file:///path/to/my/project/foo",
+            }
+        );
+        assert_parse_spec!(
+            "file:///path/to/my/project/foo#1.1.8" => {
+                name: "foo",
+                name_is_explicit: false,
+                version: "1.1.8",
+                source: "file:///path/to/my/project/foo",
+            }
+        );
+        assert_parse_spec!(
+            "path+file:///path/to/my/project/foo#1.1.8" => {
+                name: "foo",
+                name_is_explicit: false,
+                version: "1.1.8",
+                source: "path+file:///path/to/my/project/foo",
+            }
+        )
     }
 }
