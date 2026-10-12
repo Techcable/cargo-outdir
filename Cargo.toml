@@ -41,5 +41,4 @@ serde_json = "1"
 #
 # thin seems to provide the best tradeoff here :)
 lto = "thin"
-
-
+debug = "line-tables-only"
