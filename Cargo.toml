@@ -7,12 +7,14 @@ description = "A cargo subcommand to get the $OUT_DIR environment variable from 
 repository = "https://github.com/Techcable/cargo-out"
 keywords = ["cargo", "out-dir", "subcommand", "outdir", "OUT_DIR"]
 categories = ["development-tools::cargo-plugins", "development-tools::build-utils", "command-line-utilities"]
-edition = "2021"
+edition = "2024"
 readme = "README.md"
 # 1.70: std::io::IsTerminal
 # 1.70: std::cell::OnceCell
 # 1.80: std::sync::LazyLock
-rust-version = "1.80"
+# 1.85: 2024 edition
+# 1.88: let chains
+rust-version = "1.88"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

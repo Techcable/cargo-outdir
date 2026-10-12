@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 use std::{env, iter};
 
-use anyhow::{anyhow, ensure, Context};
+use anyhow::{Context, anyhow, ensure};
 use indexmap::{IndexMap, IndexSet};
 use regex::Regex;
 use serde::Deserialize;
@@ -17,7 +17,7 @@ use cargo_metadata::PackageId;
 use clap::Parser;
 
 mod spec;
-use spec::{cargo_path, resolve_pkg_spec, AnalysedMetadata, PackageSpec};
+use spec::{AnalysedMetadata, PackageSpec, cargo_path, resolve_pkg_spec};
 
 /// Required cargo version (minor version).
 ///
@@ -260,7 +260,7 @@ fn main() -> anyhow::Result<()> {
             if map.get("reason") == Some(&build_script_reason) {
                 let package_id = PackageId::deserialize(map["package_id"].clone()).unwrap();
                 let out_dir = match map.get("out_dir") {
-                    Some(Value::String(ref s)) => Some(s.clone()),
+                    Some(Value::String(s)) => Some(s.clone()),
                     Some(&Value::Null) | None => None,
                     Some(s) => panic!("Out dir is not a string: {:?}", s),
                 };
@@ -347,13 +347,17 @@ fn main() -> anyhow::Result<()> {
     match problem {
         Some(Problem::MissingOutDir) => {
             if !quiet {
-                eprintln!("ERROR: Some of the specified crates are missing an $OUT_DIR (or don't have build scripts)");
+                eprintln!(
+                    "ERROR: Some of the specified crates are missing an $OUT_DIR (or don't have build scripts)"
+                );
             }
             std::process::exit(2);
         }
         Some(Problem::NothingToPrint) => {
             if !quiet {
-                eprintln!("ERROR: None of the specified packages have an an $OUT_DIR (or don't have build scripts)");
+                eprintln!(
+                    "ERROR: None of the specified packages have an an $OUT_DIR (or don't have build scripts)"
+                );
             }
             std::process::exit(2);
         }

@@ -57,7 +57,7 @@ impl AnalysedPackage {
                 return false;
             }
         }
-        if let (Some(ref expected_src), Some(ref src)) = (&spec.source, &self.source) {
+        if let (Some(expected_src), Some(src)) = (&spec.source, &self.source) {
             if *expected_src != PackageSpec::source_as_url(src) {
                 return false;
             }
@@ -195,7 +195,7 @@ pub fn cargo_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("cargo"))
 }
 
-/// The specification of a package as given by `cargo pkgid`.  
+/// The specification of a package as given by `cargo pkgid`.
 ///
 /// This is *NOT* a [`cargo_metadata::PackageId`], because it is valid input (or output) for `cargo pkgid`
 ///
