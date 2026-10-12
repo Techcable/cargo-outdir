@@ -1,4 +1,5 @@
 /target
+/dist
 
 # Mac
 .DS_Store
