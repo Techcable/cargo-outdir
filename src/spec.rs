@@ -104,7 +104,7 @@ impl AnalysedMetadata {
             .collect::<HashMap<_, _>>();
         let mut by_name: HashMap<String, Vec<PackageId>> = HashMap::with_capacity(packages.len());
         for (id, pkg) in packages.iter() {
-            let matching_names = by_name.entry(pkg.name.clone()).or_default();
+            let matching_names = by_name.entry(pkg.name.to_string()).or_default();
             matching_names.push(id.clone());
             match matching_names.len() {
                 0 => unreachable!(),
@@ -161,7 +161,7 @@ impl AnalysedMetadata {
         let pkg = &self.packages[id];
         pkg.minimal_spec.get_or_init(|| {
             let mut res = PackageSpec {
-                name: Some(pkg.name.clone()),
+                name: Some(pkg.name.to_string()),
                 version: None,
                 source: None,
             };
